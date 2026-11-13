@@ -15,8 +15,6 @@
 
 AleShare, Android telefonunuzu kablosuz bir internet paylaşım noktasına dönüştürür. Telefon kendi Wi-Fi ağını açar; bağlanan cihaz interneti telefonun mobil verisinden alır. Bağlantı şifrelidir ve bağlanan cihazda proxy ayarı gerekmez.
 
-Yapımcı: **furkanyela**
-
 > [!NOTE]
 > Arayüz oluşturulurken yapay zekâ araçlarından yararlanılmıştır.
 
