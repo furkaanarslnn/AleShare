@@ -372,6 +372,12 @@ footer .note svg { margin-top: 1px; }
       <div class="caption" id="d-versions-wait" style="color:var(--primary);margin-bottom:4px" hidden></div>
       <div class="caption">Yeni sürüm bir cihaza gelince öbürlerine de ulaşır: bilgisayar kendiliğinden güncellenir, telefon ve tabletler önce sorar.</div>
       <div class="divider"></div>
+      <div class="row" style="padding:4px 0 10px">
+        <div class="grow"><div style="font-size:16px;line-height:24px">Yeni sürümleri denetle</div>
+          <div class="caption" id="d-check-caption"></div></div>
+        <button class="outline-btn" id="check-btn">Şimdi denetle</button>
+      </div>
+      <div class="divider"></div>
       <div class="row" style="padding-top:4px">
         <div class="grow"><div style="font-size:16px;line-height:24px">Otomatik bağlan</div>
           <div class="caption" id="d-autojoin-caption"></div></div>
@@ -430,6 +436,7 @@ const STEPS = [
 let state = null;
 let setup = null; // {steps: {id: {state, detail}}, ending: null | "finished" | "failed" | "cancelled", error}
 let busy = false;
+let checking = false; // GitHub is being asked because the button was pressed
 
 // ---- the Go side, or a stand-in when the page is opened in a browser to look at it ----
 const live = typeof window.hsBoot === "function";
@@ -437,7 +444,7 @@ const api = live ? {
   boot: () => window.hsBoot(), startSetup: () => window.hsStartSetup(), answer: (v, ok) => window.hsAnswer(v, ok),
   setAutoJoin: (on) => window.hsSetAutoJoin(on), upgrade: () => window.hsUpgrade(), uninstall: () => window.hsUninstall(),
   connect: () => window.hsConnect(), openLog: () => window.hsOpenLog(), phone: (c) => window.hsPhone(c),
-  speedTest: () => window.hsSpeedTest(), online: () => window.hsOnline(),
+  speedTest: () => window.hsSpeedTest(), online: () => window.hsOnline(), checkOnline: () => window.hsCheckOnline(),
 } : preview();
 
 // ---- the phone's panel ----
@@ -605,6 +612,9 @@ function render() {
       ? `AleShare <b>${esc(on.name)}</b> indiriliyor ve kuruluyor…`
       : `AleShare <b>${esc(on.name)}</b> yayımlandı (${bytes(on.size)}).`;
   }
+  $("check-btn").disabled = checking;
+  $("check-btn").textContent = checking ? "Bakılıyor…" : "Şimdi denetle";
+  $("d-check-caption").textContent = (state.onlineChecked ? "Son bakış: " + state.onlineChecked + ". " : "") + "Program birkaç saatte bir kendiliğinden de bakar.";
   $("log").innerHTML = (state.log || []).map((l) => `<div>${esc(l)}</div>`).join("") || "<div>Kayıt yok.</div>";
   renderPhone();
   for (const b of ["autojoin", "repair", "uninstall", "upgrade-btn", "online-btn", "connect"]) $(b).disabled = busy;
@@ -729,6 +739,8 @@ window.hsEvent = (e) => {
     case "cancelled": if (setup) setup.ending = "cancelled"; break;
     case "speed": renderSpeed(e.speed); return;
     case "action": {
+      // The look at GitHub the user asked for: what came of it (a newer release is on the page by now, with its button).
+      if (e.action === "check") { checking = false; toast(e.error ? e.error : e.detail); break; }
       // A change on the phone is no operation of this window: it must not free the buttons while an upgrade runs.
       if (e.action !== "phone") { busy = false; updating = false; }
       const done = { online: "Güncellendi; pencere yeniden açılıyor", autojoin: "Otomatik bağlanma " + (state?.autoJoin ? "açık" : "kapalı"), upgrade: "Güncellendi", uninstall: "AleShare kaldırıldı", phone: "Telefon güncellendi" };
@@ -778,6 +790,11 @@ $("connect").onclick = () => { api.connect(); toast("Bağlanılıyor…"); };
 $("autojoin").onclick = () => act(api.setAutoJoin, !state.autoJoin);
 $("upgrade-btn").onclick = () => act(api.upgrade);
 $("online-btn").onclick = () => { updating = true; act(api.online).then(() => { if (!busy) { updating = false; render(); } }); };
+$("check-btn").onclick = async () => {
+  checking = true;
+  render();
+  try { await api.checkOnline(); } catch (err) { checking = false; toast(String(err)); render(); }
+};
 $("uninstall").onclick = () => { $("confirm").hidden = false; };
 $("confirm-no").onclick = () => { $("confirm").hidden = true; };
 $("confirm-yes").onclick = () => { $("confirm").hidden = true; act(api.uninstall); };
@@ -804,7 +821,7 @@ function preview() {
     installed: true, elevated: false, version: "1.2.2", installedVersion: "1.2.1", canUpgrade: true, name: "DESKTOP-EV", phoneApp: 42, phoneAppName: "1.2.2", phoneWaiting: true,
     network: "DIRECT-HS-K7PM", next: "", autoJoin: true, onNetwork: true, tunnel: "running",
     view: { tone: "ok", label: "Bağlı", headline: "Telefona bağlı", body: "Bu bilgisayar interneti telefonun mobil verisinden alıyor." },
-    online: { name: "1.2.3", size: 8.5 * 1024 * 1024 },
+    online: { name: "1.2.3", size: 8.5 * 1024 * 1024 }, onlineChecked: "13.11.2026 06:35",
     log: ["2026-11-01 16:05:45  telefonun agi goruldu, tunel aciliyor", "2026-11-01 17:46:54  guncellendi"],
     phone: {
       version: "1.2.1", battery: 81, charging: true, network: "5G", signal: 3, today: 1.4 * 1024 * 1024 * 1024, limit_mb: 5120,
@@ -851,6 +868,7 @@ function preview() {
     uninstall: async () => { await later(); window.hsEvent({ type: "state", state: { ...base, installed: false } }); window.hsEvent({ type: "action", action: "uninstall" }); },
     connect: async () => {},
     openLog: async () => {},
+    checkOnline: async () => { await later(); await later(); base.onlineChecked = "13.11.2026 07:10"; window.hsEvent({ type: "state", state: base }); window.hsEvent({ type: "action", action: "check", detail: "AleShare güncel." }); },
     phone: async (c) => {
       await later();
       if ("pause" in c || "resume" in c) {

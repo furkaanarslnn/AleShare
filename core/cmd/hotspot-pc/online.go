@@ -96,3 +96,16 @@ func (s onlineState) announce(own int) *onlineRelease {
 	}
 	return nil
 }
+
+// lookResult says what a look at GitHub that began at began came to, for a program of the release own: no answer
+// came (answered is false), a newer release is out, or this one is the newest.
+func lookResult(s onlineState, began time.Time, own int) (text string, answered bool) {
+	switch rel := s.offer(own); {
+	case s.Checked.Before(began):
+		return "GitHub'a ulaşılamadı. İnternet bağlantına bak.", false
+	case rel != nil:
+		return "AleShare " + rel.Name + " yayımlandı.", true
+	default:
+		return "AleShare güncel.", true
+	}
+}

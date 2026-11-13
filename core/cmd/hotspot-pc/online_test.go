@@ -88,3 +88,23 @@ func TestOnlineLooksAreSpaced(t *testing.T) {
 		t.Fatal("a clock set back must not silence the looks")
 	}
 }
+
+// A look the user asked for says what came of it.
+func TestLookResult(t *testing.T) {
+	began := time.Date(2026, 11, 13, 7, 0, 0, 0, time.UTC)
+	newer := &onlineRelease{Code: 43, Name: "1.2.3"}
+	for name, c := range map[string]struct {
+		s        onlineState
+		text     string
+		answered bool
+	}{
+		"no answer":      {onlineState{Checked: began.Add(-time.Hour), Release: newer}, "GitHub'a ulaşılamadı. İnternet bağlantına bak.", false},
+		"a newer one":    {onlineState{Checked: began.Add(time.Second), Release: newer}, "AleShare 1.2.3 yayımlandı.", true},
+		"the newest":     {onlineState{Checked: began.Add(time.Second), Release: &onlineRelease{Code: 42, Name: "1.2.2"}}, "AleShare güncel.", true},
+		"none published": {onlineState{Checked: began.Add(time.Second)}, "AleShare güncel.", true},
+	} {
+		if text, answered := lookResult(c.s, began, 42); text != c.text || answered != c.answered {
+			t.Errorf("%s: %q, %v", name, text, answered)
+		}
+	}
+}

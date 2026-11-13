@@ -45,6 +45,7 @@ const (
 	niifWarning   = 0x02
 	menuOpen      = 1
 	menuJoin      = 2
+	menuCheck     = 3
 	menuQuit      = 9
 )
 
@@ -277,6 +278,7 @@ func (t *tray) menu(hwnd windows.HWND) {
 	if !connected {
 		item(menuJoin, "Telefonun ağına bağlan")
 	}
+	item(menuCheck, "Yeni sürümü denetle")
 	appendMenu.Call(m, 0x800 /* MF_SEPARATOR */, 0, 0)
 	item(menuQuit, "Simgeyi kapat")
 	var pt struct{ x, y int32 }
@@ -291,9 +293,34 @@ func (t *tray) menu(hwnd windows.HWND) {
 		if set, err := loadSettings(); err == nil && set.Profile != "" {
 			go func() { _ = run("netsh.exe", "wlan", "connect", "name="+set.Profile, "ssid="+set.Profile) }()
 		}
+	case menuCheck:
+		t.checkNow()
 	case menuQuit:
 		postMessage.Call(uintptr(hwnd), wmClose, 0, 0)
 	}
+}
+
+// checkNow asks GitHub at once, because the user said so, and answers with a notification whatever came of it.
+func (t *tray) checkNow() {
+	if !t.looking.CompareAndSwap(false, true) {
+		return // a look is under way; it tells of a newer release by itself
+	}
+	go func() {
+		defer t.looking.Store(false)
+		began := time.Now()
+		s := checkOnline(true)
+		text, answered := lookResult(s, began, versionCode(version))
+		switch rel := s.offer(versionCode(version)); {
+		case !answered:
+			t.notify("GitHub'a ulaşılamadı", "İnternet bağlantına bak.", true)
+		case rel != nil:
+			s.Told = rel.Code // told here: the regular look must not tell it a second time
+			saveOnline(s)
+			t.notify(strings.TrimSuffix(text, "."), "Güncellemek için AleShare penceresini aç ve Güncelle'ye tıkla.", false)
+		default:
+			t.notify("AleShare güncel", "Kurulu sürüm "+version+", yayımlanan en yeni sürüm.", false)
+		}
+	}()
 }
 
 // watch looks at the tunnel and the phone every few seconds. When the installed program was replaced by a newer

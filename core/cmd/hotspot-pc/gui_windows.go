@@ -54,7 +54,8 @@ type windowState struct {
 	Phone            *phoneStatus `json:"phone"`        // the phone's state now; nil when it cannot be asked
 	View             connView     `json:"view"`
 	Log              []string     `json:"log"`
-	Online           onlineOffer  `json:"online"` // a newer release on GitHub; its name is empty when there is none
+	Online           onlineOffer  `json:"online"`        // a newer release on GitHub; its name is empty when there is none
+	OnlineChecked    string       `json:"onlineChecked"` // when GitHub last answered, as the window writes it; "" for never
 }
 
 // onlineOffer is the newer release the window offers to install.
@@ -87,6 +88,7 @@ type window struct {
 	w        webview2.WebView
 	answers  chan answer
 	busy     atomic.Bool // a setup or an action runs; only one at a time
+	checking atomic.Bool // GitHub is being asked because the user said so
 	upgrade  bool        // this file differs from the installed program (worked out once: hashing is not free)
 	mu       sync.Mutex
 	last     windowState
@@ -132,6 +134,7 @@ func runWindow(setupNow bool) error {
 		"hsPhone":       g.phone,
 		"hsSpeedTest":   g.speedTest,
 		"hsOnline":      g.installOnline,
+		"hsCheckOnline": g.checkNow,
 	} {
 		if err := w.Bind(name, fn); err != nil {
 			return err
@@ -204,8 +207,12 @@ func (g *window) collect() windowState {
 			s.PhoneAppName = release.Name(s.PhoneApp)
 		}
 	}
-	if rel := loadOnline().offer(installedCode(set)); rel != nil && !g.upgrade {
+	online := loadOnline()
+	if rel := online.offer(installedCode(set)); rel != nil && !g.upgrade {
 		s.Online = onlineOffer{Name: rel.Name, Size: rel.PC.Size}
+	}
+	if !online.Checked.IsZero() {
+		s.OnlineChecked = online.Checked.Format("02.01.2006 15:04")
 	}
 	if s.OnNetwork {
 		s.Phone, _ = fetchPhone(set, s.Tunnel == serviceRunning)
@@ -378,6 +385,30 @@ func (g *window) installOnline() error {
 }
 
 func (g *window) uninstall() error { return g.act("uninstall") }
+
+// checkNow asks GitHub at once whether a newer release is out (the window and the icon otherwise look every few
+// hours) and tells the page what came of it; a newer release then shows with its button, as it does by itself.
+func (g *window) checkNow() error {
+	set, err := loadSettings()
+	if err != nil {
+		return err
+	}
+	if !g.checking.CompareAndSwap(false, true) {
+		return errors.New("Zaten bakılıyor.")
+	}
+	go func() {
+		defer g.checking.Store(false)
+		began := time.Now()
+		text, answered := lookResult(checkOnline(true), began, installedCode(set))
+		g.refresh() // first, so that the release is on the page when the message comes
+		e := event{Type: "action", Action: "check", Detail: text}
+		if !answered {
+			e.Detail, e.Error = "", text
+		}
+		g.emit(e)
+	}()
+	return nil
+}
 
 // connect asks Windows to join the phone's network now; the tunnel follows by itself. No rights needed.
 func (g *window) connect() error {
