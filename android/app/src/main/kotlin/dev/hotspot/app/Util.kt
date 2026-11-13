@@ -49,13 +49,14 @@ fun qrBitmap(text: String, size: Int = 720): Bitmap {
 }
 
 /**
- * What the release with the number [code] is called: "1.0.N" up to 38, "1.1" for 39 (the first one published), then
- * "1.1.1", "1.1.2" and so on. The same rule as release.Name in the Go core.
+ * What the release with the number [code] is called: "1.0.N" up to 38, "1.1" for 39 (the first one published),
+ * "1.2" for 40, then "1.2.1", "1.2.2" and so on. The same rule as release.Name in the Go core.
  */
 fun releaseName(code: Long): String = when {
   code < 39 -> "1.0.$code"
   code == 39L -> "1.1"
-  else -> "1.1.${code - 39}"
+  code == 40L -> "1.2"
+  else -> "1.2.${code - 40}"
 }
 
 /** This app's release number (versionCode), to compare with the one a phone offers. */

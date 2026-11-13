@@ -1467,12 +1467,6 @@ private fun SettingsContent(
       }
     }
   }
-
-  SettingsGroup("Hakkında") {
-    var licenses by remember { mutableStateOf(false) }
-    ChoiceRow("Açık kaynak lisansları", "Göster", onClick = { licenses = true })
-    if (licenses) LicensesDialog(onDismiss = { licenses = false })
-  }
 }
 
 /** The line under a device's name: why it is paused, or what it used today and the rules it has. */

@@ -68,7 +68,7 @@ object OnlineUpdate {
 
   /** A release is worth offering when it is one of this project's and its APK lies among this project's releases. */
   internal fun valid(code: Long, name: String, url: String, size: Long, sha256: String): Boolean =
-    code > 0 && name == releaseName(code) && url.startsWith(DOWNLOADS) && size in 1..MAX_BYTES &&
+    code > 0 && name.isNotEmpty() && url.startsWith(DOWNLOADS) && size in 1..MAX_BYTES &&
       sha256.length == 64 && sha256.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
 
   /** Whether it is time to look again, given when the last answer came and when the last try was made. */
@@ -80,7 +80,9 @@ object OnlineUpdate {
     val apk = o.getJSONObject("apk")
     val r = Release(
       code = o.getLong("code"),
-      name = o.getString("name"),
+      // What the release is called is the label; the name beside it is for the apps of release 1.1, which accept
+      // only the name their own rule gives the number, and stands in when there is no label.
+      name = o.optString("label").ifEmpty { o.getString("name") },
       url = apk.getString("url"),
       size = apk.getLong("size"),
       sha256 = apk.getString("sha256").lowercase(),

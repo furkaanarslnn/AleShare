@@ -12,6 +12,14 @@ var goodManifest = `{"code":40,"name":"1.1.1",
 
 var sum64 = strings.Repeat("ab", 32)
 
+// The release's label is what it is called; the name beside it is for the apps of release 1.1.
+func TestManifestLabel(t *testing.T) {
+	r, err := parseManifest([]byte(strings.Replace(goodManifest, `"name":"1.1.1"`, `"name":"1.1.1","label":"1.2"`, 1)))
+	if err != nil || r.Code != 40 || r.Name != "1.2" {
+		t.Fatalf("got %+v, %v", r, err)
+	}
+}
+
 func TestParseManifest(t *testing.T) {
 	r, err := parseManifest([]byte("\xef\xbb\xbf" + goodManifest))
 	if err != nil {
@@ -23,7 +31,7 @@ func TestParseManifest(t *testing.T) {
 	bad := map[string]string{
 		"a file on another site":        strings.Replace(goodManifest, "https://github.com/furkaanarslnn/AleShare/releases/download/v1.1.1/AleShare.exe", "https://example.com/AleShare.exe", 1),
 		"a file in another repository":  strings.Replace(goodManifest, "furkaanarslnn/AleShare/releases/download/v1.1.1/AleShare", "someone/AleShare/releases/download/v1.1.1/AleShare", 1),
-		"a name that is not the number": strings.Replace(goodManifest, `"name":"1.1.1"`, `"name":"2.0"`, 1),
+		"no name":                       strings.Replace(goodManifest, `"name":"1.1.1"`, `"name":""`, 1),
 		"no size":                       strings.Replace(goodManifest, `"size":8500000`, `"size":0`, 1),
 		"a short checksum":              strings.Replace(goodManifest, sum64+`"}}`, `abcd"}}`, 1),
 		"not JSON":                      "<html>Not Found</html>",

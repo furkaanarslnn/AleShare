@@ -1,7 +1,7 @@
 // Command notices writes the license texts of everything the published programs are built from:
 //
-//	core/cmd/hotspot-pc/ui/licenses.txt        what AleShare.exe carries (its window opens it)
-//	android/app/src/main/assets/licenses.txt   what the APK carries (Ayarlar shows it)
+//	core/cmd/hotspot-pc/ui/licenses.txt        what AleShare.exe carries (it prints them with "licenses")
+//	android/app/src/main/assets/licenses.txt   what the APK carries, as a file inside it
 //
 // Run it from core/ whenever a dependency changes:
 //

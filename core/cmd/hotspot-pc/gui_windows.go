@@ -26,7 +26,8 @@ import (
 //go:embed ui/index.html
 var indexHTML string
 
-// licensesText is the license texts of everything this program is built from (cmd/notices writes the file).
+// licensesText is the license texts of everything this program is built from (cmd/notices writes the file). The
+// program carries them, as the licenses ask, and prints them with "licenses"; the window does not show them.
 //
 //go:embed ui/licenses.txt
 var licensesText string
@@ -130,7 +131,6 @@ func runWindow(setupNow bool) error {
 		"hsPhone":       g.phone,
 		"hsSpeedTest":   g.speedTest,
 		"hsOnline":      g.installOnline,
-		"hsLicenses":    g.openLicenses,
 	} {
 		if err := w.Bind(name, fn); err != nil {
 			return err
@@ -477,21 +477,6 @@ func (g *window) speedTest() error {
 
 func (g *window) openLog() error {
 	return exec.Command("notepad.exe", filepath.Join(dataDir(), "hotspot.log")).Start()
-}
-
-// openLicenses shows the license texts of what the program is built from: Notepad opens a copy of them.
-func (g *window) openLicenses() error {
-	dir := filepath.Join(os.Getenv("LOCALAPPDATA"), "Hotspot")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	path := filepath.Join(dir, "AleShare-lisanslar.txt")
-	// With a byte order mark and Windows line ends, so that every Notepad shows the Turkish letters and the lines.
-	text := string(rune(0xFEFF)) + strings.ReplaceAll(licensesText, "\n", "\r\n")
-	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
-		return err
-	}
-	return exec.Command("notepad.exe", path).Start()
 }
 
 func onOffArg(on bool) string {

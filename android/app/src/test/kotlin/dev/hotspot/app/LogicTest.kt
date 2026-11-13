@@ -304,13 +304,14 @@ class LogicTest {
     assertEquals("23:05'te", Tr.atClock(23 * 60 + 5))
   }
 
-  // Releases up to 38 were called 1.0.N; 39, the first one published, is 1.1, and the names count on from there.
+  // Releases up to 38 were called 1.0.N; 39, the first one published, is 1.1, 40 is 1.2, and the names count on.
   @Test
   fun releasesAreNamedByTheirNumber() {
     assertEquals("1.0.38", releaseName(38))
     assertEquals("1.1", releaseName(39))
-    assertEquals("1.1.1", releaseName(40))
-    assertEquals("1.1.12", releaseName(51))
+    assertEquals("1.2", releaseName(40))
+    assertEquals("1.2.1", releaseName(41))
+    assertEquals("1.2.11", releaseName(51))
   }
 
   // update.json may only name files among this project's releases on GitHub.
@@ -321,7 +322,7 @@ class LogicTest {
     assertTrue(OnlineUpdate.valid(40, "1.1.1", url, 25_000_000, sum))
     assertFalse("another site", OnlineUpdate.valid(40, "1.1.1", "https://example.com/AleShare-1.1.1.apk", 25_000_000, sum))
     assertFalse("another repository", OnlineUpdate.valid(40, "1.1.1", url.replace(OnlineUpdate.REPO, "someone/AleShare"), 25_000_000, sum))
-    assertFalse("a name that is not the number", OnlineUpdate.valid(40, "2.0", url, 25_000_000, sum))
+    assertFalse("no name", OnlineUpdate.valid(40, "", url, 25_000_000, sum))
     assertFalse("no size", OnlineUpdate.valid(40, "1.1.1", url, 0, sum))
     assertFalse("a short checksum", OnlineUpdate.valid(40, "1.1.1", url, 25_000_000, "abcd"))
   }
@@ -338,35 +339,4 @@ class LogicTest {
     assertTrue("a clock set back must not silence the looks", OnlineUpdate.due(t0 - hour, t0, t0))
   }
 
-  // The license texts of what the app is built from: framed names, then the text they share.
-  @Test
-  fun licenseTextsAreReadSectionBySection() {
-    val rule = "=".repeat(80)
-    val t = parseLicenses("Title\n\nWhat this is,\nin two lines.\n\n$rule\nfirst v1\nsecond v2\n$rule\n\nThe text.\n\nIts end.\n\n$rule\nthird\n$rule\n\nAnother.\n")
-    assertEquals(listOf("Title", "What this is,\nin two lines."), t.intro)
-    assertEquals(2, t.sections.size)
-    assertEquals(listOf("first v1", "second v2"), t.sections[0].names)
-    assertEquals(listOf("The text.", "Its end."), t.sections[0].paragraphs)
-    assertEquals(LicenseSection(listOf("third"), listOf("Another.")), t.sections[1])
-    assertEquals("a text without sections is all introduction", listOf("Only this."), parseLicenses("Only this.\n").intro)
-  }
-
-  // Lines wrapped by hand are joined, so that a narrow screen does not break them twice; the rest keep their lines.
-  @Test
-  fun wrappedLicenseLinesAreJoined() {
-    val wrapped = listOf(
-      "Permission is hereby granted, free of charge, to any person obtaining a copy",
-      "of this software and associated documentation files, to deal in the Software",
-      "without restriction.",
-    )
-    assertEquals(wrapped.joinToString(" "), reflow(wrapped))
-    assertEquals("short lines stay", "Apache License\nVersion 2.0, January 2004", reflow(listOf("   Apache License", "   Version 2.0, January 2004")))
-    assertEquals(
-      "list items stay",
-      "   * Redistributions of source code must retain the above copyright notice.".trim() + "\n" + "* Redistributions in binary form must reproduce it.",
-      reflow(listOf("   * Redistributions of source code must retain the above copyright notice.", "   * Redistributions in binary form must reproduce it.")),
-    )
-    val divider = "-".repeat(80)
-    assertEquals("dividers stay", "$divider\nNOTICES FOR BARCODE4J\n$divider", reflow(listOf(divider, "NOTICES FOR BARCODE4J", divider)))
-  }
 }

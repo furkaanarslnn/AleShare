@@ -51,12 +51,12 @@ func TestReleaseNames(t *testing.T) {
 			t.Errorf("publishedAPK(%q) = %v", name, got)
 		}
 	}
-	for name, want := range map[string]int{"AleShare-1.1.apk": 39, "AleShare-1.1.2.apk": 41, "AleShare-1.0.32.apk": 32, "AleShare-1.0.40.apk": 0, "Hotspot-1.0.12.apk": 12, "Hotspot-1.0.9.apk": 9, "Hotspot.apk": 0, "hotspot-pc.exe": 0, "Hotspot-1.0.12.apk.part": 0} {
+	for name, want := range map[string]int{"AleShare-1.1.apk": 39, "AleShare-1.2.1.apk": 41, "AleShare-1.1.2.apk": 0, "AleShare-1.0.32.apk": 32, "AleShare-1.0.40.apk": 0, "Hotspot-1.0.12.apk": 12, "Hotspot-1.0.9.apk": 9, "Hotspot.apk": 0, "hotspot-pc.exe": 0, "Hotspot-1.0.12.apk.part": 0} {
 		if got := apkRelease(name); got != want {
 			t.Errorf("apkRelease(%q) = %d", name, got)
 		}
 	}
-	for v, want := range map[string]int{"1.1": 39, "1.1.1": 40, "1.1.12": 51, "1.1.0": 0, "1.1.01": 0, "1.0.39": 0, "1.2": 0, "1.0.12": 12, "1.0.0": 0, "geliştirme": 0, "1.0.12-x": 0} {
+	for v, want := range map[string]int{"1.1": 39, "1.2": 40, "1.2.1": 41, "1.2.11": 51, "1.1.1": 0, "1.2.0": 0, "1.2.01": 0, "1.0.39": 0, "1.3": 0, "1.0.12": 12, "1.0.0": 0, "geliştirme": 0, "1.0.12-x": 0} {
 		if got := versionCode(v); got != want {
 			t.Errorf("versionCode(%q) = %d", v, got)
 		}

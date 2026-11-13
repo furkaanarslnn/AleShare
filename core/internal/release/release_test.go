@@ -50,6 +50,12 @@ func TestVerifyRefuses(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
+	// What update.json calls a release for the apps of 1.1, which knew only their own rule.
+	for code, name := range map[int]string{38: "1.0.38", 39: "1.1", 40: "1.1.1", 41: "1.1.2"} {
+		if got := ManifestName(code); got != name {
+			t.Errorf("ManifestName(%d) = %q, want %q", code, got, name)
+		}
+	}
 }
 
 // The key in the code is a real Ed25519 public key (a typo would make every release unverifiable).
@@ -59,14 +65,15 @@ func TestPublicKey(t *testing.T) {
 	}
 }
 
-// A release's name follows from its number: "1.0.N" before the first published one, "1.1" for that one, "1.1.N" after.
+// A release's name follows from its number: "1.0.N" before the first published one, then the names the owner gave
+// ("1.1", "1.2"), and counting on from the last of them.
 func TestNamesAndNumbers(t *testing.T) {
-	for code, name := range map[int]string{1: "1.0.1", 38: "1.0.38", 39: "1.1", 40: "1.1.1", 51: "1.1.12"} {
+	for code, name := range map[int]string{1: "1.0.1", 38: "1.0.38", 39: "1.1", 40: "1.2", 41: "1.2.1", 51: "1.2.11"} {
 		if Name(code) != name || Code(name) != code {
 			t.Errorf("release %d: Name = %q, Code(%q) = %d", code, Name(code), name, Code(name))
 		}
 	}
-	for _, name := range []string{"", "1.0.0", "1.0.39", "1.1.0", "1.1.07", "1.1.x", "1.2", "2.0", "v1.1", "1.1 "} {
+	for _, name := range []string{"", "1.0.0", "1.0.39", "1.1.0", "1.1.1", "1.2.0", "1.2.07", "1.2.x", "1.3", "2.0", "v1.2", "1.2 "} {
 		if got := Code(name); got != 0 {
 			t.Errorf("Code(%q) = %d, but no release is called that", name, got)
 		}

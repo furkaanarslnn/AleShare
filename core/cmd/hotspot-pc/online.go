@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"hotspot/core/internal/release"
 )
 
 // The project's releases on GitHub. Every release there carries the two files a user needs (the APK and this
@@ -27,12 +25,15 @@ var (
 	downloadBase = "https://github.com/" + releaseRepo + "/releases/download/"
 )
 
-// onlineRelease is update.json.
+// onlineRelease is update.json. Name is what the release is called. In the file that is "label"; its "name" is
+// there for the apps of release 1.1, which accept only the name their own rule gives the number (see
+// release.ManifestName), and stands in when a file has no label.
 type onlineRelease struct {
-	Code int        `json:"code"`
-	Name string     `json:"name"`
-	APK  onlineFile `json:"apk"`
-	PC   onlineFile `json:"pc"`
+	Code  int        `json:"code"`
+	Name  string     `json:"name"`
+	Label string     `json:"label,omitempty"`
+	APK   onlineFile `json:"apk"`
+	PC    onlineFile `json:"pc"`
 }
 
 type onlineFile struct {
@@ -49,8 +50,11 @@ func parseManifest(data []byte) (onlineRelease, error) {
 	if err := json.Unmarshal(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")), &r); err != nil {
 		return r, fmt.Errorf("sürüm bilgisi okunamadı: %w", err)
 	}
-	if r.Code <= 0 || r.Name != release.Name(r.Code) {
+	if r.Code <= 0 || r.Name == "" {
 		return r, errors.New("sürüm bilgisi bozuk")
+	}
+	if r.Label != "" {
+		r.Name, r.Label = r.Label, ""
 	}
 	for _, f := range []onlineFile{r.APK, r.PC} {
 		if !strings.HasPrefix(f.URL, downloadBase) || f.Size <= 0 || f.Size > maxDownload || len(f.SHA256) != 64 {

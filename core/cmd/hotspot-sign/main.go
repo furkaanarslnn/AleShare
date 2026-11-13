@@ -3,6 +3,7 @@
 //	hotspot-sign keygen KEYFILE                      a new key; prints its public half for release.PublicKey
 //	hotspot-sign sign -key KEYFILE -code N PROGRAM   signs PROGRAM (in place) as release number N
 //	hotspot-sign name N                              prints what release number N is called (for the build scripts)
+//	hotspot-sign manifest-name N                     prints the name update.json gives release number N (see release.ManifestName)
 //	hotspot-sign apk FILE                            prints the number and the name of the release an APK is
 //	hotspot-sign verify PROGRAM                      checks PROGRAM against release.PublicKey
 package main
@@ -30,7 +31,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("keygen, sign, name, apk or verify")
+		return errors.New("keygen, sign, name, manifest-name, apk or verify")
 	}
 	switch args[0] {
 	case "keygen":
@@ -49,15 +50,19 @@ func run(args []string) error {
 		}
 		fmt.Println(base64.StdEncoding.EncodeToString(pub))
 		return nil
-	case "name":
+	case "name", "manifest-name":
 		code := 0
 		if len(args) == 2 {
 			code, _ = strconv.Atoi(args[1])
 		}
 		if code <= 0 {
-			return errors.New("name N")
+			return errors.New(args[0] + " N")
 		}
-		fmt.Println(release.Name(code))
+		if args[0] == "name" {
+			fmt.Println(release.Name(code))
+		} else {
+			fmt.Println(release.ManifestName(code))
+		}
 		return nil
 	case "apk":
 		if len(args) != 2 {

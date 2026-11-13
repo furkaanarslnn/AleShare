@@ -403,7 +403,6 @@ footer .note svg { margin-top: 1px; }
       <span class="caption">Bağlantı WireGuard ile şifrelenir. Girdiğin siteler kaydedilmez.</span></div>
     <div class="gap-6"></div>
     <div class="caption"><span id="version"></span> · Yapımcı: furkanyela</div>
-    <button class="text-btn" id="licenses" style="font-size:13px;font-weight:400">Açık kaynak lisansları</button>
   </footer>
 </main>
 
@@ -438,7 +437,7 @@ const api = live ? {
   boot: () => window.hsBoot(), startSetup: () => window.hsStartSetup(), answer: (v, ok) => window.hsAnswer(v, ok),
   setAutoJoin: (on) => window.hsSetAutoJoin(on), upgrade: () => window.hsUpgrade(), uninstall: () => window.hsUninstall(),
   connect: () => window.hsConnect(), openLog: () => window.hsOpenLog(), phone: (c) => window.hsPhone(c),
-  speedTest: () => window.hsSpeedTest(), online: () => window.hsOnline(), licenses: () => window.hsLicenses(),
+  speedTest: () => window.hsSpeedTest(), online: () => window.hsOnline(),
 } : preview();
 
 // ---- the phone's panel ----
@@ -782,7 +781,6 @@ $("uninstall").onclick = () => { $("confirm").hidden = false; };
 $("confirm-no").onclick = () => { $("confirm").hidden = true; };
 $("confirm-yes").onclick = () => { $("confirm").hidden = true; act(api.uninstall); };
 $("open-log").onclick = () => api.openLog();
-$("licenses").onclick = () => api.licenses();
 for (const [toggle, body] of [["adv-toggle", "adv"], ["ph-settings-toggle", "ph-settings"]]) {
   $(toggle).onclick = () => {
     const open = $(body).hidden;
@@ -852,7 +850,6 @@ function preview() {
     uninstall: async () => { await later(); window.hsEvent({ type: "state", state: { ...base, installed: false } }); window.hsEvent({ type: "action", action: "uninstall" }); },
     connect: async () => {},
     openLog: async () => {},
-    licenses: async () => {},
     phone: async (c) => {
       await later();
       if ("pause" in c || "resume" in c) {

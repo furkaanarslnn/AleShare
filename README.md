@@ -146,7 +146,7 @@ Telif hakkı © 2026 furkanyela. Tüm hakları saklıdır.
 
 Uygulamaları indirip kendi cihazlarınızda kullanmanız serbesttir. Kaynak kod incelenebilmesi amacıyla yayımlanmıştır; yazılı izin olmadan kopyalanamaz, değiştirilemez ve dağıtılamaz. Ayrıntılar [LICENSE](LICENSE) dosyasındadır.
 
-Kullanılan açık kaynak bileşenler kendi lisanslarına tabidir; lisans metinleri uygulamaların içindedir (**Ayarlar → Hakkında → Açık kaynak lisansları**). WireGuard, Jason A. Donenfeld'in tescilli markasıdır; AleShare, WireGuard projesiyle bağlantılı değildir.
+Kullanılan açık kaynak bileşenler kendi lisanslarına tabidir; lisans metinleri depodadır ([Android uygulaması](android/app/src/main/assets/licenses.txt), [Windows programı](core/cmd/hotspot-pc/ui/licenses.txt)). WireGuard, Jason A. Donenfeld'in tescilli markasıdır; AleShare, WireGuard projesiyle bağlantılı değildir.
 
 ## Sorumluluk reddi
 

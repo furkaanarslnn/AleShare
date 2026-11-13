@@ -28,37 +28,63 @@ var PublicKey = mustKey("aDFL9DtzrR1E9CE3z3yVPLZPtkPWGziZVVzGSlA50wU=")
 
 var magic = []byte("HSREL1\x00\x00")
 
-// firstPublished is the first release that was published. The ones before it were called "1.0.<code>"; it is "1.1",
-// and the ones after it count on from there: "1.1.1" is the next one, then "1.1.2".
-const firstPublished = 39
+// The releases' names. Up to release 38 a release was called "1.0.<code>". From the first published one on the owner
+// names releases; a release that got no name of its own counts on from the last one that did: "1.2.1" is the
+// release after "1.2".
+var named = []struct {
+	code int
+	name string
+}{
+	{39, "1.1"}, // the first release that was published
+	{40, "1.2"},
+}
 
 // Name is what the release with the number code is called.
 func Name(code int) string {
-	switch {
-	case code < firstPublished:
+	if code < named[0].code {
 		return fmt.Sprintf("1.0.%d", code)
-	case code == firstPublished:
-		return "1.1"
 	}
-	return fmt.Sprintf("1.1.%d", code-firstPublished)
+	last := named[0]
+	for _, n := range named {
+		if n.code <= code {
+			last = n
+		}
+	}
+	if code == last.code {
+		return last.name
+	}
+	return fmt.Sprintf("%s.%d", last.name, code-last.code)
 }
 
 // Code is the number of the release that is called name, 0 when no release is.
 func Code(name string) int {
-	var n int
-	switch {
-	case name == "1.1":
-		return firstPublished
-	case strings.HasPrefix(name, "1.1."):
-		n, _ = strconv.Atoi(name[len("1.1."):])
-		n += firstPublished
-	case strings.HasPrefix(name, "1.0."):
-		n, _ = strconv.Atoi(name[len("1.0."):])
+	n := 0
+	if rest, ok := strings.CutPrefix(name, "1.0."); ok {
+		n, _ = strconv.Atoi(rest)
 	}
-	if n <= 0 || Name(n) != name { // also refuses "1.0.39", "1.1.0" and "1.1.07"
+	for _, base := range named {
+		if name == base.name {
+			n = base.code
+		} else if rest, ok := strings.CutPrefix(name, base.name+"."); ok {
+			if count, err := strconv.Atoi(rest); err == nil && count > 0 {
+				n = base.code + count
+			}
+		}
+	}
+	if n <= 0 || Name(n) != name { // also refuses "1.0.39", "1.1.1" (that release is 1.2), "1.2.0" and "1.2.07"
 		return 0
 	}
 	return n
+}
+
+// ManifestName is the name update.json must give release code so that the apps of the first published release
+// (1.1) take it: they refuse a manifest whose name is not the one their own rule gives the number, and their rule
+// knew only "1.1" and "1.1.<count>". Later apps show the manifest's label, which is what the release is called.
+func ManifestName(code int) string {
+	if code <= named[0].code {
+		return Name(code)
+	}
+	return fmt.Sprintf("%s.%d", named[0].name, code-named[0].code)
 }
 
 // Info is the release a signed program belongs to.
