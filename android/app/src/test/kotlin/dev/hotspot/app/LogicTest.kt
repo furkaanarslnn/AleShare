@@ -332,10 +332,10 @@ class LogicTest {
     val hour = 3_600_000L
     val t0 = 1_800_000_000_000L
     assertTrue("never looked", OnlineUpdate.due(t0, 0, 0))
-    assertFalse(OnlineUpdate.due(t0 + 11 * hour, t0, t0))
-    assertTrue("an answer holds for twelve hours", OnlineUpdate.due(t0 + 12 * hour + 1, t0, t0))
-    assertFalse("no answer: not again within half an hour", OnlineUpdate.due(t0 + 13 * hour + 600_000, t0, t0 + 13 * hour))
-    assertTrue(OnlineUpdate.due(t0 + 13 * hour + 31 * 60_000, t0, t0 + 13 * hour))
+    assertFalse(OnlineUpdate.due(t0 + 2 * hour, t0, t0))
+    assertTrue("an answer holds for three hours", OnlineUpdate.due(t0 + 3 * hour + 1, t0, t0))
+    assertFalse("no answer: not again within half an hour", OnlineUpdate.due(t0 + 4 * hour + 600_000, t0, t0 + 4 * hour))
+    assertTrue(OnlineUpdate.due(t0 + 4 * hour + 31 * 60_000, t0, t0 + 4 * hour))
     assertTrue("a clock set back must not silence the looks", OnlineUpdate.due(t0 - hour, t0, t0))
   }
 

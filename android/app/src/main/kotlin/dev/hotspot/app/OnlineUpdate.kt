@@ -20,8 +20,9 @@ import java.util.concurrent.Executors
 
 /**
  * The project's releases on GitHub. Every release there carries the APK, the Windows program and "update.json",
- * which describes it; /releases/latest/download/ always leads to the newest release's file. The app looks there now
- * and then (a few kilobytes), tells the user when a newer release is out, and downloads it only when asked to.
+ * which describes it; /releases/latest/download/ always leads to the newest release's file. The app looks there
+ * every few hours (a few kilobytes): when it is opened, while it shares, and, closed, from [UpdateJob]. It tells
+ * the user when a newer release is out and downloads it only when asked to.
  * Android's installer then takes the APK only if it carries this app's signature, and so does [Updates.check]
  * before the user is offered it.
  *
@@ -33,7 +34,7 @@ object OnlineUpdate {
   private const val MANIFEST = "https://github.com/$REPO/releases/latest/download/update.json"
   private const val DOWNLOADS = "https://github.com/$REPO/releases/download/"
   private const val MAX_BYTES = 256L shl 20 // no release file is anywhere near this
-  private const val EVERY_MS = 12 * 3_600_000L // between two looks that got an answer
+  private const val EVERY_MS = 3 * 3_600_000L // between two looks that got an answer
   private const val RETRY_MS = 30 * 60_000L // after one that got none: away from a network there is no news
 
   /** A release as update.json describes it, with the APK's place. */
@@ -64,6 +65,7 @@ object OnlineUpdate {
   fun setEnabled(context: Context, on: Boolean) {
     prefs(context).edit().putBoolean(KEY_ENABLED, on).apply()
     nextLook = 0
+    UpdateJob.schedule(context) // the looks while the app is closed follow the switch
   }
 
   /** A release is worth offering when it is one of this project's and its APK lies among this project's releases. */
@@ -92,12 +94,16 @@ object OnlineUpdate {
 
   /**
    * Looks for a newer release when it is time to (or now with [force], which also works with the switch off: the
-   * user asked). [done] hears on the worker thread whether an answer came. Cheap to call often.
+   * user asked). [done] always hears whether an answer came, on the worker thread or, when no look was due, at
+   * once. Cheap to call often.
    */
   fun check(context: Context, force: Boolean = false, done: ((Boolean) -> Unit)? = null) {
     val app = context.applicationContext
     val now = System.currentTimeMillis()
-    if (!force && (now < nextLook || !enabled(app))) return
+    if (!force && (now < nextLook || !enabled(app))) {
+      done?.invoke(false)
+      return
+    }
     nextLook = now + 60_000 // while this look is under way
     worker.execute {
       val p = prefs(app)

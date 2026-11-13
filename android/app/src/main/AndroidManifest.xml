@@ -99,6 +99,12 @@
                 android:resource="@xml/share_widget" />
         </receiver>
 
+        <!-- Looks for a newer release every few hours while the app is closed (UpdateJob). Only the system runs it. -->
+        <service
+            android:name=".UpdateJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
         <!-- The Quick Settings tile: one tap starts or stops sharing. Only the system's panel may bind it. -->
         <service
             android:name=".ShareTileService"

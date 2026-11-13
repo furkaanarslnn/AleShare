@@ -251,7 +251,7 @@ fun MainScreen() {
   var editingPlan by remember { mutableStateOf(false) }
   var addingGuest by remember { mutableStateOf(false) }
   val speed by SpeedTest.state.collectAsStateWithLifecycle()
-  LaunchedEffect(Unit) { OnlineUpdate.check(context) } // is a newer release out on GitHub? (at most twice a day)
+  LaunchedEffect(Unit) { OnlineUpdate.check(context) } // is a newer release out on GitHub? (every few hours)
   var deviceSheet by remember { mutableStateOf<String?>(null) }
   var deviceTick by remember { mutableStateOf(0) } // read the devices' limits and pauses again
   var usage by remember { mutableStateOf(DataUsage.today(context)) }
@@ -1396,7 +1396,7 @@ private fun SettingsContent(
     var auto by remember { mutableStateOf(OnlineUpdate.enabled(context)) }
     SwitchRow(
       "Yeni sürümleri denetle",
-      "Günde bir iki kez GitHub'a bakar ve yeni sürüm yayımlanınca haber verir. İndirme ancak sen isteyince başlar.",
+      "Birkaç saatte bir GitHub'a bakar ve yeni sürüm yayımlanınca haber verir. İndirme ancak sen isteyince başlar.",
       auto,
       { auto = it; OnlineUpdate.setEnabled(context, it) },
     )

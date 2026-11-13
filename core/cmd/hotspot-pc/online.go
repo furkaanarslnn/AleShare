@@ -14,7 +14,7 @@ import (
 // file. The programs look there now and then and tell the user when a newer release is out.
 const (
 	releaseRepo = "furkaanarslnn/AleShare"
-	onlineEvery = 12 * time.Hour   // between two looks that got an answer
+	onlineEvery = 3 * time.Hour    // between two looks that got an answer
 	onlineRetry = 30 * time.Minute // after a look without one: away from the phone there is often no internet
 	maxDownload = int64(256 << 20) // no release file is anywhere near this
 )

@@ -17,6 +17,7 @@ class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     ShareTileService.ensureEnabled(this)
+    UpdateJob.schedule(this) // looks for a newer release now and then, also while the app is closed
 
     enableEdgeToEdge()
     // A tapped join link starts the app; the screen asks the user about it, nothing happens before that.

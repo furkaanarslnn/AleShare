@@ -441,7 +441,7 @@ class GatewayService : Service() {
       ShareControls.refresh(this, connected)
     }
     takeReceivedApp(core)
-    OnlineUpdate.check(this) // is a newer release out on GitHub? Asked at most twice a day, a few kilobytes
+    OnlineUpdate.check(this) // is a newer release out on GitHub? Asked every few hours, a few kilobytes
     Guests.record(this, DataUsage.record(this, core))
     val stats = core.stats()
     val down = perSecond(stats.bytesDown, lastBytes?.first, now - lastBytesAt)

@@ -76,12 +76,12 @@ func TestOnlineLooksAreSpaced(t *testing.T) {
 		t.Fatal("never looked: look")
 	}
 	s := onlineState{Checked: t0, Tried: t0}
-	if s.due(t0.Add(11*time.Hour)) || !s.due(t0.Add(12*time.Hour+time.Second)) {
-		t.Fatal("an answered look holds for twelve hours")
+	if s.due(t0.Add(2*time.Hour)) || !s.due(t0.Add(3*time.Hour+time.Second)) {
+		t.Fatal("an answered look holds for three hours")
 	}
-	// Half a day later there is no internet: try again in half an hour, not every few seconds.
-	failed := onlineState{Checked: t0, Tried: t0.Add(13 * time.Hour)}
-	if failed.due(t0.Add(13*time.Hour+10*time.Minute)) || !failed.due(t0.Add(13*time.Hour+31*time.Minute)) {
+	// Later there is no internet: try again in half an hour, not every few seconds.
+	failed := onlineState{Checked: t0, Tried: t0.Add(4 * time.Hour)}
+	if failed.due(t0.Add(4*time.Hour+10*time.Minute)) || !failed.due(t0.Add(4*time.Hour+31*time.Minute)) {
 		t.Fatal("a look without an answer is tried again after half an hour")
 	}
 	if !s.due(t0.Add(-time.Hour)) {

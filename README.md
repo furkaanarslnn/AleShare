@@ -98,7 +98,7 @@ Windows programı bağlantının durumunu ve telefonun bilgilerini gösterir; te
 
 ## Güncellemeler
 
-- Yeni sürüm yayımlandığında uygulama ve Windows programı bildirim gösterir. İndirme siz isteyince başlar.
+- Yeni sürüm yayımlandığında uygulama ve Windows programı birkaç saat içinde bildirim gösterir. İndirme siz isteyince başlar.
 - Bir cihazı güncellemeniz yeterlidir; diğer cihazlar yeni sürümü paylaşan telefondan alır.
 - Yalnızca bu projenin imzasını taşıyan dosyalar kurulur.
 
