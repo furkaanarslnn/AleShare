@@ -1,0 +1,879 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AleShare</title>
+<style>
+/* The phone app's look: one deep teal accent on cool greys; green and amber only mean "on" and "attention". */
+:root {
+  --primary: #0B6B80; --on-primary: #FFFFFF;
+  --primary-container: #D6EEF4; --on-primary-container: #07323C;
+  --bg: #F5F7F8; --surface: #FFFFFF; --on-surface: #101820;
+  --surface-variant: #EDF1F3; --on-surface-variant: #56626C;
+  --outline: #B9C3CA; --outline-variant: #E2E7EA;
+  --error: #BA2B2B; --error-container: #FBE4E2; --on-error-container: #5C1212;
+  --ok: #1F8A5B; --warn: #B76E00; --warn-container: #FCEBCB; --on-warn-container: #4A2D00;
+  --idle: #56626C;
+  --shadow: 0 1px 2px rgba(16, 24, 32, .04);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --primary: #5CC8E0; --on-primary: #00313B;
+    --primary-container: #0F4756; --on-primary-container: #C9EEF7;
+    --bg: #0D1114; --surface: #151A1F; --on-surface: #E6EAED;
+    --surface-variant: #1E252B; --on-surface-variant: #9AA6B0;
+    --outline: #3A4651; --outline-variant: #27303A;
+    --error: #FF8A80; --error-container: #4A1C1C; --on-error-container: #FFDAD6;
+    --ok: #4CC38A; --warn: #F0B04A; --warn-container: #3A2A0C; --on-warn-container: #FBE3B8;
+    --idle: #9AA6B0;
+    --shadow: none;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg); color: var(--on-surface);
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px; line-height: 20px; letter-spacing: .1px;
+  -webkit-font-smoothing: antialiased; user-select: none; cursor: default;
+}
+.wrap { max-width: 560px; margin: 0 auto; padding: 4px 20px 24px; }
+::-webkit-scrollbar { width: 12px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--outline); border-radius: 12px; border: 4px solid var(--bg); }
+[hidden] { display: none !important; }
+
+header { display: flex; align-items: center; gap: 10px; padding: 14px 0; }
+header svg.logo { width: 28px; height: 28px; color: var(--primary); }
+header h1 { font-size: 20px; line-height: 26px; font-weight: 600; margin: 0; letter-spacing: 0; }
+.chip { margin-left: auto; font-size: 12px; font-weight: 600; letter-spacing: .3px; color: var(--on-surface-variant);
+  background: var(--surface-variant); border-radius: 999px; padding: 3px 10px; }
+
+.panel { background: var(--surface); border: 1px solid var(--outline-variant); border-radius: 20px; padding: 20px;
+  margin-bottom: 12px; box-shadow: var(--shadow); }
+.stack > * + * { margin-top: 12px; }
+h2 { font-size: 26px; line-height: 32px; font-weight: 600; letter-spacing: -.3px; margin: 0; }
+h3 { font-size: 16px; line-height: 22px; font-weight: 600; margin: 0; }
+p { margin: 0; }
+.muted { color: var(--on-surface-variant); }
+.caption { font-size: 13px; line-height: 18px; color: var(--on-surface-variant); }
+.mono { font-family: "Cascadia Mono", Consolas, monospace; font-size: 13px; }
+.gap-6 { height: 6px; } .gap-12 { height: 12px; } .gap-20 { height: 20px; }
+
+svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+svg.i.s18 { width: 18px; height: 18px; } svg.i.s16 { width: 16px; height: 16px; }
+
+.status { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: currentColor; }
+.dot.pulse { animation: pulse .8s ease-in-out infinite alternate; }
+@keyframes pulse { from { opacity: .35; } to { opacity: 1; } }
+.tone-ok { color: var(--ok); } .tone-warn { color: var(--warn); } .tone-idle { color: var(--idle); }
+
+button { font: inherit; letter-spacing: inherit; cursor: pointer; border: 0; }
+button:disabled { cursor: default; opacity: .45; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.btn { width: 100%; height: 52px; border-radius: 14px; font-weight: 600; font-size: 14px;
+  background: var(--primary); color: var(--on-primary); transition: filter .15s, background .15s; }
+.btn:not(:disabled):hover { filter: brightness(1.08); }
+.btn.tonal { background: var(--primary-container); color: var(--on-primary-container); }
+.btn.small { width: auto; height: 38px; padding: 0 18px; border-radius: 14px; }
+.text-btn { background: none; color: var(--primary); font-weight: 600; padding: 8px 12px; border-radius: 10px;
+  display: inline-flex; align-items: center; gap: 8px; }
+.text-btn:not(:disabled):hover { background: var(--surface-variant); }
+.text-btn.danger { color: var(--error); }
+.outline-btn { background: none; color: var(--on-surface); border: 1px solid var(--outline); height: 38px; padding: 0 18px;
+  border-radius: 14px; font-weight: 600; }
+.outline-btn.danger { color: var(--error); border-color: var(--error); }
+.outline-btn:not(:disabled):hover { background: var(--surface-variant); }
+
+.banner { display: flex; gap: 12px; align-items: flex-start; border-radius: 14px; padding: 12px 14px; }
+.banner svg { margin-top: 0; }
+.banner.info { background: var(--primary-container); color: var(--on-primary-container); }
+.banner.warn { background: var(--warn-container); color: var(--on-warn-container); }
+.banner.error { background: var(--error-container); color: var(--on-error-container); }
+.banner .grow { flex: 1; }
+.banner button { margin: -6px -6px -6px 0; color: inherit; }
+
+.row { display: flex; align-items: center; gap: 12px; }
+.row .grow { flex: 1; min-width: 0; }
+.value-row { padding: 6px 0; }
+.value-row .label { font-size: 13px; line-height: 18px; color: var(--on-surface-variant); }
+.value-row .value { font-size: 16px; line-height: 24px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.divider { height: 1px; background: var(--outline-variant); margin: 10px 0; }
+
+.badge { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; flex: none;
+  background: var(--primary-container); color: var(--on-primary-container); }
+
+/* Switch, as Material draws it. */
+.switch { position: relative; width: 52px; height: 32px; flex: none; border-radius: 16px; background: var(--surface-variant);
+  border: 2px solid var(--outline); transition: background .2s, border-color .2s; padding: 0; }
+.switch::after { content: ""; position: absolute; top: 6px; left: 6px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--outline); transition: all .2s; }
+.switch[aria-checked="true"] { background: var(--primary); border-color: var(--primary); }
+.switch[aria-checked="true"]::after { left: 22px; top: 2px; width: 24px; height: 24px; background: var(--on-primary); }
+
+/* The steps of the setup. */
+.steps { list-style: none; margin: 0; padding: 0; }
+.step { display: flex; gap: 14px; padding: 10px 0; }
+.step + .step { border-top: 1px solid var(--outline-variant); }
+.mark { width: 28px; height: 28px; border-radius: 50%; flex: none; display: grid; place-items: center;
+  font-size: 13px; font-weight: 600; border: 2px solid var(--outline); color: var(--on-surface-variant); }
+.step.active .mark { border-color: var(--primary); border-right-color: transparent; animation: spin 1s linear infinite; }
+.step.active .mark span { animation: spin 1s linear infinite reverse; color: var(--primary); }
+.step.done .mark { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+.step.failed .mark { border-color: var(--error); color: var(--error); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.step .title { font-weight: 600; }
+.step.pending .title { color: var(--on-surface-variant); }
+
+.field { position: relative; }
+.field input { width: 100%; height: 52px; border-radius: 14px; border: 1px solid var(--outline); background: var(--surface);
+  color: var(--on-surface); font: inherit; font-size: 16px; padding: 0 48px 0 16px; user-select: text; }
+.field input:focus { border-color: var(--primary); outline: none; box-shadow: 0 0 0 1px var(--primary); }
+.field .eye { position: absolute; right: 6px; top: 6px; width: 40px; height: 40px; border-radius: 10px; background: none;
+  color: var(--on-surface-variant); display: grid; place-items: center; }
+.field .eye:hover { background: var(--surface-variant); }
+.choice { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 14px; border: 1px solid var(--outline-variant); }
+.choice + .choice { margin-top: 8px; }
+.choice input { accent-color: var(--primary); width: 18px; height: 18px; }
+
+.qr { background: #fff; border-radius: 20px; padding: 14px; width: 248px; height: 248px; margin: 4px auto 0;
+  border: 1px solid var(--outline-variant); }
+.qr svg { width: 100%; height: 100%; display: block; }
+.howto { counter-reset: n; list-style: none; padding: 0; margin: 0; }
+.howto li { counter-increment: n; display: flex; gap: 12px; align-items: center; padding: 5px 0; }
+.howto li::before { content: counter(n); width: 26px; height: 26px; flex: none; border-radius: 50%; display: grid; place-items: center;
+  background: var(--primary-container); color: var(--on-primary-container); font-size: 13px; font-weight: 600; }
+.waiting { display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--on-surface-variant); font-size: 13px; }
+.sas { font-size: 40px; line-height: 48px; font-weight: 600; letter-spacing: 6px; text-align: center; font-variant-numeric: tabular-nums; }
+
+.hero { text-align: center; }
+.hero .big { width: 64px; height: 64px; border-radius: 50%; margin: 4px auto 14px; display: grid; place-items: center;
+  background: var(--primary-container); color: var(--primary); }
+.hero .big svg { width: 32px; height: 32px; }
+.hero.ok .big { color: var(--ok); }
+
+.facts { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; }
+.fact { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.fact .caption { font-weight: 400; }
+.bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; }
+.bars i { width: 4px; border-radius: 1px; background: var(--outline); }
+.bars i.on { background: var(--on-surface); }
+.bars i:nth-child(1) { height: 25%; } .bars i:nth-child(2) { height: 50%; } .bars i:nth-child(3) { height: 75%; } .bars i:nth-child(4) { height: 100%; }
+.meter { height: 6px; border-radius: 3px; background: var(--surface-variant); overflow: hidden; }
+.meter > div { height: 100%; background: var(--primary); border-radius: 3px; }
+.meter.warn > div { background: var(--warn); }
+.big-number { font-size: 22px; line-height: 28px; font-weight: 600; }
+.big-number.small { font-size: 15px; line-height: 22px; }
+.speed { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+select { font: inherit; color: var(--on-surface); background: var(--surface); border: 1px solid var(--outline);
+  border-radius: 10px; height: 36px; padding: 0 10px; }
+.device { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
+.device + .device { border-top: 1px solid var(--outline-variant); }
+.device .grow { flex: 1; min-width: 0; }
+.avatar { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; flex: none;
+  background: var(--primary-container); color: var(--on-primary-container); font-weight: 600; }
+
+.collapse { display: flex; align-items: center; width: 100%; background: none; padding: 0; color: inherit; text-align: left; min-height: 32px; }
+.collapse h3 { flex: 1; }
+.collapse svg { transition: transform .2s; color: var(--on-surface-variant); }
+.collapse[aria-expanded="true"] svg { transform: rotate(180deg); }
+.log { background: var(--surface-variant); border-radius: 14px; padding: 10px 12px; max-height: 160px; overflow: auto;
+  font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px; line-height: 18px; color: var(--on-surface-variant); user-select: text; }
+.log div { overflow-wrap: anywhere; }
+.log div + div { margin-top: 2px; }
+
+footer { text-align: center; padding-top: 8px; }
+footer .note { display: flex; gap: 10px; justify-content: center; align-items: flex-start; color: var(--on-surface-variant); }
+footer .note svg { margin-top: 1px; }
+
+.scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, .32); display: grid; place-items: center; padding: 24px; z-index: 10; }
+.dialog { background: var(--surface); border-radius: 28px; padding: 24px; max-width: 400px; width: 100%; }
+.dialog h3 { font-size: 20px; line-height: 26px; margin-bottom: 12px; }
+.dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.toast { position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 20px); opacity: 0; transition: all .2s;
+  background: var(--on-surface); color: var(--surface); padding: 10px 16px; border-radius: 10px; font-weight: 600; z-index: 20; pointer-events: none; }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin 1s linear infinite; }
+
+.preview-bar { position: fixed; top: 0; right: 0; display: flex; gap: 4px; padding: 6px; z-index: 30; flex-wrap: wrap; max-width: 260px; justify-content: flex-end; }
+.preview-bar button { font-size: 11px; padding: 3px 8px; border-radius: 8px; background: #000a; color: #fff; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <!-- The logo: the hotspot sign. winres/icon_gen.go draws it and prints this symbol. -->
+    <symbol id="logo" viewBox="0 0 24 24"><path d="M8.04 17.36A5.6 5.6 0 1 1 15.96 17.36M5.21 20.19A9.6 9.6 0 1 1 18.79 20.19"/><circle cx="12" cy="13.4" r="2" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="shield" viewBox="0 0 24 24"><path d="M12 3l8 3v5.5c0 4.8-3.3 8.3-8 9.5-4.7-1.2-8-4.7-8-9.5V6z"/><path d="M9 12.2l2.2 2.2L15.2 10.4"/></symbol>
+    <symbol id="wifi" viewBox="0 0 24 24"><path d="M2 9a15 15 0 0 1 20 0"/><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/><path d="M12 19.5h.01"/></symbol>
+    <symbol id="download" viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></symbol>
+    <symbol id="qr" viewBox="0 0 24 24"><path d="M4 4h6v6H4z"/><path d="M14 4h6v6h-6z"/><path d="M4 14h6v6H4z"/><path d="M14 14h2v2h-2z"/><path d="M18 14h2"/><path d="M14 18h2"/><path d="M18 18h2v2h-2z"/></symbol>
+    <symbol id="alert" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z"/><path d="M12 8v5"/><path d="M12 16.5h.01"/></symbol>
+    <symbol id="laptop" viewBox="0 0 24 24"><path d="M5 6a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v9H5z"/><path d="M3 19h18"/></symbol>
+    <symbol id="phone" viewBox="0 0 24 24"><path d="M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M11 18h2"/></symbol>
+    <symbol id="chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+    <symbol id="eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><path d="M12 9.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6z"/></symbol>
+    <symbol id="eye-off" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7c1.6 0 3 .4 4.3 1M22 12s-3.5 7-10 7c-1.6 0-3-.4-4.3-1"/><path d="M9.9 9.9a2.8 2.8 0 0 0 4.2 3.7"/><path d="M4 4l16 16"/></symbol>
+    <symbol id="check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+    <symbol id="trash" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12"/><path d="M9 7V4h6v3"/></symbol>
+    <symbol id="link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
+    <symbol id="battery" viewBox="0 0 24 24"><path d="M4 8h14a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><path d="M21 11v2"/></symbol>
+    <symbol id="bolt" viewBox="0 0 24 24"><path d="M13 3L5 14h6l-1 7 8-11h-6z"/></symbol>
+    <symbol id="up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+    <symbol id="down" viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></symbol>
+    <symbol id="refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.3 4.9L20 16"/><path d="M20 20v-4h-4"/></symbol>
+  </defs>
+</svg>
+
+<main class="wrap">
+  <header>
+    <svg class="i logo"><use href="#logo"/></svg>
+    <h1>AleShare</h1>
+    <span class="chip">Windows</span>
+  </header>
+
+  <!-- Not installed: what the setup will do. -->
+  <section id="welcome" hidden>
+    <div class="panel stack">
+      <h2>Bu bilgisayarı telefona bağla</h2>
+      <p class="muted">AleShare ile bu bilgisayar, telefonunun mobil internetini kullanır. Kurulum bir kez yapılır ve birkaç dakika sürer.</p>
+      <div class="gap-6"></div>
+      <div class="row"><span class="badge"><svg class="i"><use href="#download"/></svg></span>
+        <div class="grow"><div class="title" style="font-weight:600">WireGuard programı</div><div class="caption">Bağlantıyı şifreler. İndirilip kurulur; bunun için bir kez internet gerekir.</div></div></div>
+      <div class="row"><span class="badge"><svg class="i"><use href="#wifi"/></svg></span>
+        <div class="grow"><div style="font-weight:600">Telefonun Wi-Fi ağı</div><div class="caption">Kendiliğinden bulunur. Parolası gerekirse bir kez sorulur.</div></div></div>
+      <div class="row"><span class="badge"><svg class="i"><use href="#qr"/></svg></span>
+        <div class="grow"><div style="font-weight:600">QR kodla eşleşme</div><div class="caption">Ekranda çıkan kodu telefonunla okutursun.</div></div></div>
+      <div class="gap-6"></div>
+      <div class="banner info"><svg class="i"><use href="#phone"/></svg><div class="grow">Önce telefonda AleShare'i aç ve <b>Paylaşımı başlat</b>'a dokun.</div></div>
+      <div class="gap-6"></div>
+      <button class="btn" id="start">Kuruluma başla</button>
+      <p class="caption" style="text-align:center">Windows yönetici izni isteyecek.</p>
+      <div class="banner error" id="welcome-error" hidden><svg class="i"><use href="#alert"/></svg><div class="grow"></div></div>
+    </div>
+  </section>
+
+  <!-- The setup under way. -->
+  <section id="setup" hidden>
+    <div class="panel">
+      <h3 style="margin-bottom:6px">Kurulum</h3>
+      <ol class="steps" id="steps"></ol>
+    </div>
+    <div class="panel stack" id="ask" hidden></div>
+    <div class="panel stack" id="setup-end" hidden></div>
+  </section>
+
+  <!-- Installed: the connection. -->
+  <section id="status" hidden>
+    <div class="panel">
+      <div class="status" id="st-label"><span class="dot" id="st-dot"></span><span></span></div>
+      <div class="gap-12"></div>
+      <h2 id="st-headline"></h2>
+      <div class="gap-6"></div>
+      <p class="muted" id="st-body"></p>
+      <div id="st-connect" hidden><div class="gap-20"></div><button class="btn" id="connect">Telefonun ağına bağlan</button></div>
+    </div>
+
+    <!-- The phone, through the tunnel: how it is doing; its devices; the speed test; its switches (folded away). -->
+    <div id="phone-panel" hidden>
+      <div class="panel">
+        <div class="row"><h3 class="grow">Telefon</h3><span class="caption" id="ph-version"></span></div>
+        <div class="gap-12"></div>
+        <div class="facts">
+          <span class="fact"><svg class="i s18"><use href="#battery"/></svg><span id="ph-battery"></span></span>
+          <span class="fact" id="ph-charging" hidden><svg class="i s16"><use href="#bolt"/></svg><span class="caption">Şarj oluyor</span></span>
+          <span class="fact"><span class="bars" id="ph-bars"><i></i><i></i><i></i><i></i></span><span id="ph-network"></span></span>
+          <span class="fact"><svg class="i s18"><use href="#wifi"/></svg><span id="ph-band"></span></span>
+        </div>
+        <div class="divider"></div>
+        <div class="speed">
+          <div><div class="caption">İndirme</div><div class="big-number" id="ph-down"></div></div>
+          <div><div class="caption">Yükleme</div><div class="big-number" id="ph-up"></div></div>
+          <div><div class="caption">Bugün</div><div class="big-number" id="ph-today"></div></div>
+        </div>
+        <div id="ph-limit-wrap" hidden><div class="gap-12"></div><div class="meter" id="ph-meter"><div></div></div>
+          <div class="gap-6"></div><div class="caption" id="ph-limit-text"></div></div>
+        <div id="ph-plan-wrap" hidden><div class="gap-12"></div>
+          <div class="row"><div class="grow caption">Aylık paket</div><div class="caption" id="ph-plan-used" style="font-weight:600"></div></div>
+          <div class="gap-6"></div><div class="meter" id="ph-plan-meter"><div></div></div>
+          <div class="gap-6"></div><div class="caption" id="ph-plan-text"></div></div>
+        <div class="banner warn" id="ph-hot" hidden style="margin:14px 0 0">
+          <svg class="i"><use href="#phone"/></svg><div class="grow">Telefon ısındı. Soğuyana kadar hız 10 Mbit/s ile sınırlı.</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Cihazlar</h3>
+        <div id="ph-devices"></div>
+      </div>
+
+      <div class="panel">
+        <div class="row"><div class="grow"><h3>Hız testi</h3>
+          <div class="caption" id="ph-speed-caption">Önce bu bilgisayarla telefonun arası, sonra telefonun mobil interneti ölçülür.</div></div>
+          <button class="outline-btn" id="ph-speed-btn">Ölç</button></div>
+        <div id="ph-speed-result" hidden><div class="gap-12"></div>
+          <div class="speed">
+            <div><div class="caption">Wi-Fi ↓ / ↑</div><div class="big-number small" id="ph-speed-wifi">—</div></div>
+            <div><div class="caption">Mobil ↓ / ↑</div><div class="big-number small" id="ph-speed-mobile">—</div></div>
+            <div><div class="caption">Ping</div><div class="big-number small" id="ph-speed-ping">—</div></div>
+          </div>
+          <div class="gap-6"></div><div class="caption" id="ph-speed-verdict"></div></div>
+      </div>
+
+      <div class="panel">
+        <button class="collapse" id="ph-settings-toggle" aria-expanded="false"><h3>Telefon ayarları</h3><svg class="i"><use href="#chevron"/></svg></button>
+        <div id="ph-settings" hidden>
+          <div class="gap-12"></div>
+          <div class="row" style="padding:4px 0"><div class="grow"><div>Reklam ve izleyici engelleme</div><div class="caption" id="ph-ads-caption"></div></div>
+            <button class="switch" role="switch" data-key="ads" aria-label="Reklam ve izleyici engelleme"></button></div>
+          <div class="row" style="padding:4px 0"><div class="grow"><div>Veri tasarrufu</div><div class="caption">Paylaşım açıkken sistem ve oyun güncellemeleri indirilmez.</div></div>
+            <button class="switch" role="switch" data-key="saver" aria-label="Veri tasarrufu"></button></div>
+          <div class="row" style="padding:4px 0"><div class="grow"><div>Akıllı öncelik</div><div class="caption">Görüşme ya da oyun sırasında büyük indirmeler yavaşlatılır.</div></div>
+            <button class="switch" role="switch" data-key="priority" aria-label="Akıllı öncelik"></button></div>
+          <div class="row" style="padding:4px 0"><div class="grow"><div>AleDPI modu</div><div class="caption">Açılmayan siteleri açmayı dener. Gerekmiyorsa kapalı tut.</div></div>
+            <button class="switch" role="switch" data-key="split" aria-label="AleDPI modu"></button></div>
+          <div class="row" style="padding:4px 0"><div class="grow"><div>Pil ve ısı koruması</div><div class="caption">Telefon ısınınca paylaşım yavaşlar, pil %5'e düşünce durur.</div></div>
+            <button class="switch" role="switch" data-key="guard" aria-label="Pil ve ısı koruması"></button></div>
+          <div class="divider"></div>
+          <div class="row"><div class="grow">Günlük veri sınırı</div>
+            <select id="ph-limit"><option value="0">Sınır yok</option><option value="1024">1 GB</option><option value="2048">2 GB</option>
+              <option value="5120">5 GB</option><option value="10240">10 GB</option><option value="20480">20 GB</option><option value="51200">50 GB</option></select></div>
+        </div>
+      </div>
+    </div>
+    <div class="banner warn" id="phone-missing" hidden style="margin-bottom:12px">
+      <svg class="i"><use href="#phone"/></svg><div class="grow">Telefonun bilgileri bekleniyor. Bir dakika içinde gelir.</div>
+    </div>
+
+    <div class="banner info" id="upgrade" hidden style="margin-bottom:12px">
+      <svg class="i"><use href="#download"/></svg>
+      <div class="grow" id="upgrade-text"></div>
+      <button class="text-btn" id="upgrade-btn">Kur</button>
+    </div>
+
+    <div class="banner info" id="online" hidden style="margin-bottom:12px">
+      <svg class="i"><use href="#download"/></svg>
+      <div class="grow" id="online-text"></div>
+      <button class="text-btn" id="online-btn">Güncelle</button>
+    </div>
+
+    <div class="panel">
+      <h3>Bağlantı</h3>
+      <div class="gap-6"></div>
+      <div class="value-row"><div class="label">Telefonun Wi-Fi ağı</div><div class="value mono" id="d-network"></div></div>
+      <div class="divider"></div>
+      <div class="value-row"><div class="label">Bu bilgisayarın telefondaki adı</div><div class="value" id="d-name"></div></div>
+      <div class="divider"></div>
+      <div class="value-row"><div class="label">Sürümler</div><div class="value" id="d-versions"></div></div>
+      <div class="caption" id="d-versions-wait" style="color:var(--primary);margin-bottom:4px" hidden></div>
+      <div class="caption">Yeni sürüm bir cihaza gelince öbürlerine de ulaşır: bilgisayar kendiliğinden güncellenir, telefon ve tabletler önce sorar.</div>
+      <div class="divider"></div>
+      <div class="row" style="padding-top:4px">
+        <div class="grow"><div style="font-size:16px;line-height:24px">Otomatik bağlan</div>
+          <div class="caption" id="d-autojoin-caption"></div></div>
+        <button class="switch" role="switch" id="autojoin" aria-label="Otomatik bağlan"></button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <button class="collapse" id="adv-toggle" aria-expanded="false"><h3>Gelişmiş</h3><svg class="i"><use href="#chevron"/></svg></button>
+      <div id="adv" hidden>
+        <div class="gap-12"></div>
+        <div class="row"><span class="badge"><svg class="i"><use href="#refresh"/></svg></span>
+          <div class="grow"><div style="font-size:16px;line-height:24px">Yeniden eşleştir</div><div class="caption">Telefonda bu bilgisayarı sildiysen ya da başka bir telefona geçtiysen.</div></div>
+          <button class="outline-btn" id="repair">Başlat</button></div>
+        <div class="divider" style="margin:14px 0"></div>
+        <div class="row"><span class="badge"><svg class="i"><use href="#trash"/></svg></span>
+          <div class="grow"><div style="font-size:16px;line-height:24px">Kaldır</div><div class="caption">AleShare bu bilgisayardan kaldırılır; WireGuard programı kalır.</div></div>
+          <button class="outline-btn danger" id="uninstall">Kaldır</button></div>
+        <div class="divider" style="margin:14px 0"></div>
+        <div class="row"><div class="grow" style="font-weight:600">Son kayıtlar</div><button class="text-btn" id="open-log">Tümünü aç</button></div>
+        <div class="gap-6"></div>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="note"><svg class="i s16"><use href="#shield"/></svg>
+      <span class="caption">Bağlantı WireGuard ile şifrelenir. Girdiğin siteler kaydedilmez.</span></div>
+    <div class="gap-6"></div>
+    <div class="caption"><span id="version"></span> · Yapımcı: furkanyela</div>
+    <button class="text-btn" id="licenses" style="font-size:13px;font-weight:400">Açık kaynak lisansları</button>
+  </footer>
+</main>
+
+<div class="scrim" id="confirm" hidden>
+  <div class="dialog">
+    <h3>AleShare kaldırılsın mı?</h3>
+    <p class="muted">AleShare bu bilgisayardan kaldırılır ve telefonla eşleşme silinir. Telefonda da <b>Cihazlar</b> listesinden bu bilgisayarı kaldırmayı unutma.</p>
+    <div class="actions"><button class="text-btn" id="confirm-no">Vazgeç</button><button class="text-btn danger" id="confirm-yes">Kaldır</button></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const icon = (name, cls = "") => `<svg class="i ${cls}"><use href="#${name}"/></svg>`;
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+const STEPS = [
+  ["wireguard", "WireGuard programı"],
+  ["wifi", "Telefonun Wi-Fi ağı"],
+  ["pair", "QR kodla eşleşme"],
+  ["install", "Kurulumun tamamlanması"],
+];
+let state = null;
+let setup = null; // {steps: {id: {state, detail}}, ending: null | "finished" | "failed" | "cancelled", error}
+let busy = false;
+
+// ---- the Go side, or a stand-in when the page is opened in a browser to look at it ----
+const live = typeof window.hsBoot === "function";
+const api = live ? {
+  boot: () => window.hsBoot(), startSetup: () => window.hsStartSetup(), answer: (v, ok) => window.hsAnswer(v, ok),
+  setAutoJoin: (on) => window.hsSetAutoJoin(on), upgrade: () => window.hsUpgrade(), uninstall: () => window.hsUninstall(),
+  connect: () => window.hsConnect(), openLog: () => window.hsOpenLog(), phone: (c) => window.hsPhone(c),
+  speedTest: () => window.hsSpeedTest(), online: () => window.hsOnline(), licenses: () => window.hsLicenses(),
+} : preview();
+
+// ---- the phone's panel ----
+const pending = {}; // switches just changed here, shown as asked until the phone says so
+const mb = 1024 * 1024;
+function bytes(n) {
+  if (n >= 1024 * mb) return (n / 1024 / mb).toFixed(n >= 100 * 1024 * mb ? 0 : 1).replace(".", ",") + " GB";
+  if (n >= mb) return Math.round(n / mb) + " MB";
+  return Math.round(n / 1024) + " KB";
+}
+function speed(bps) {
+  const mbit = bps * 8 / 1e6;
+  return mbit >= 10 ? Math.round(mbit) + " Mbit/s" : mbit.toFixed(1).replace(".", ",") + " Mbit/s";
+}
+function limitLabel(m) { return m % 1024 === 0 ? m / 1024 + " GB" : m + " MB"; }
+// "%45'i", "%6'sı", "%10'u": the Turkish ending after a number follows the way the number is read aloud.
+function shareOf(n) {
+  const ones = ["", "i", "si", "ü", "ü", "i", "sı", "si", "i", "u"], tens = ["", "u", "si", "u", "ı", "si", "ı", "i", "i", "ı"];
+  return "%" + n + "'" + (n % 10 ? ones[n % 10] : n % 100 ? tens[Math.floor(n / 10) % 10] : n ? "ü" : "ı");
+}
+function versionCode(v) { const m = /^1\.0\.(\d+)$/.exec(v || ""); return m ? +m[1] : 0; }
+function bitSpeed(bits) { return speed(bits / 8); }
+function bitPair(down, up) { return bitSpeed(down).replace(" Mbit/s", "") + " / " + bitSpeed(up); }
+
+// The speed test: the Wi-Fi to the phone, then the phone's mobile internet; where the bottleneck is follows.
+function renderSpeed(r) {
+  $("ph-speed-result").hidden = false;
+  $("ph-speed-btn").disabled = r.stage !== "done";
+  $("ph-speed-btn").textContent = r.stage === "done" ? "Yeniden ölç" : "Ölçülüyor…";
+  $("ph-speed-wifi").textContent = r.wifiDown ? bitPair(r.wifiDown, r.wifiUp) : r.stage === "wifi" ? "…" : "—";
+  const m = r.mobile;
+  $("ph-speed-mobile").textContent = m ? bitPair(m.down_bps, m.up_bps) : r.stage === "mobile" ? "…" : "—";
+  $("ph-speed-ping").textContent = m ? m.ping_ms + " ms" : "—";
+  let verdict = r.stage === "wifi" ? "Wi-Fi hızı ölçülüyor…" : r.stage === "mobile" ? "Telefon mobil internetin hızını ölçüyor (yaklaşık 20 sn)…" : "";
+  if (r.error) verdict = r.error;
+  else if (r.stage === "done" && m) {
+    const down = Math.min(r.wifiDown, m.down_bps);
+    verdict = m.down_bps < r.wifiDown * 0.8 ? "Yavaşlık mobil internetten kaynaklanıyor; Wi-Fi daha hızlı. Telefonu pencereye yaklaştırmak sinyali güçlendirebilir." :
+      r.wifiDown < m.down_bps * 0.8 ? "Yavaşlık Wi-Fi'den kaynaklanıyor. Telefonu bilgisayara yaklaştır ya da 5 GHz'e geç." :
+      "Wi-Fi ile mobil internet aynı hızda.";
+    verdict += " Bu bilgisayarda hız en fazla yaklaşık " + bitSpeed(down) + " olur. Ölçüm " + bytes(m.bytes) + " mobil veri harcadı.";
+  }
+  $("ph-speed-verdict").textContent = verdict;
+}
+
+function renderPhone() {
+  const p = state.phone;
+  $("phone-panel").hidden = !p;
+  $("phone-missing").hidden = !!p || !state.onNetwork || state.tunnel !== "running";
+  if (!p) return;
+  $("ph-version").textContent = p.version ? "AleShare " + p.version : "";
+  $("ph-battery").textContent = p.battery >= 0 ? "%" + p.battery : "—";
+  $("ph-charging").hidden = !p.charging;
+  [...$("ph-bars").children].forEach((bar, i) => bar.classList.toggle("on", i < p.signal));
+  $("ph-network").textContent = p.network || "Mobil veri";
+  $("ph-band").textContent = p.band === "5" ? "5 GHz" : "2,4 GHz";
+  $("ph-down").textContent = speed(p.down_bps);
+  $("ph-up").textContent = speed(p.up_bps);
+  $("ph-today").textContent = bytes(p.today);
+  const limit = p.limit_mb * mb;
+  $("ph-limit-wrap").hidden = !limit;
+  if (limit) {
+    const share = Math.min(1, p.today / limit);
+    $("ph-meter").firstElementChild.style.width = (share * 100) + "%";
+    $("ph-meter").classList.toggle("warn", share >= 0.9);
+    $("ph-limit-text").textContent = "Günlük sınırın " + shareOf(Math.round(share * 100)) + " kullanıldı (" + limitLabel(p.limit_mb) + ")";
+  }
+  const plan = p.plan;
+  $("ph-plan-wrap").hidden = !plan;
+  if (plan) {
+    const total = plan.limit_mb * mb, share = Math.min(1, plan.used / total);
+    $("ph-plan-used").textContent = bytes(plan.used) + " / " + limitLabel(plan.limit_mb);
+    $("ph-plan-meter").firstElementChild.style.width = (share * 100) + "%";
+    $("ph-plan-meter").classList.toggle("warn", share >= 0.9);
+    $("ph-plan-text").textContent = plan.used >= total ? "Paket bitti · " + plan.days_left + " gün sonra yenilenir" :
+      bytes(total - plan.used) + " kaldı · yenilenmesine " + plan.days_left + " gün var · günde en fazla " + bytes(plan.per_day) +
+      (plan.whole_phone ? "" : " (yalnızca paylaşılan veri sayılıyor)");
+  }
+  $("ph-hot").hidden = !p.hot;
+  $("ph-ads-caption").textContent = "Bütün cihazlarda reklam ve izleyiciler engellenir." + (p.ads && p.blocked ? " Bu paylaşımda " + p.blocked + " istek engellendi." : "");
+  document.querySelectorAll("#phone-panel .switch").forEach((s) => {
+    const key = s.dataset.key;
+    if (key in pending && pending[key] === p[key]) delete pending[key];
+    s.setAttribute("aria-checked", String(key in pending ? pending[key] : p[key]));
+  });
+  const sel = $("ph-limit");
+  if (![...sel.options].some((o) => +o.value === p.limit_mb)) sel.add(new Option(limitLabel(p.limit_mb), p.limit_mb));
+  if (document.activeElement !== sel) sel.value = String(p.limit_mb);
+  $("ph-devices").innerHTML = (p.devices || []).map((d) => {
+    const paused = d.paused !== "none";
+    const note = d.paused === "manual" ? "Duraklatıldı" : d.paused === "limit" ? "Günlük sınır doldu" :
+      d.paused === "quiet" ? "İnternet kapalı (" + d.quiet + ")" :
+      [d.guest, "Bugün " + bytes(d.today), d.limit_mb ? "sınır " + limitLabel(d.limit_mb) : "",
+        d.speed_kbps ? bitSpeed(d.speed_kbps * 1000) : "", d.quiet ? d.quiet + " arası kapalı" : ""].filter(Boolean).join(" · ");
+    return `<div class="device"><span class="avatar">${esc(d.name.slice(0, 1).toLocaleUpperCase("tr"))}</span>
+      <div class="grow"><div>${esc(d.name)}</div><div class="caption">${esc(note)}</div></div>
+      <button class="outline-btn" data-device="${esc(d.name)}" data-paused="${paused}">${paused ? "Devam ettir" : "Duraklat"}</button></div>`;
+  }).join("") || '<div class="caption" style="padding:8px 0">Eşleşmiş cihaz yok.</div>';
+}
+
+async function phoneChange(change) {
+  try { await api.phone(change); } catch (err) { toast(String(err)); }
+}
+
+document.querySelectorAll("#phone-panel .switch").forEach((s) => {
+  s.onclick = () => {
+    const key = s.dataset.key;
+    const next = s.getAttribute("aria-checked") !== "true";
+    pending[key] = next;
+    s.setAttribute("aria-checked", String(next));
+    phoneChange({ [key]: next });
+  };
+});
+$("ph-limit").onchange = (e) => phoneChange({ limit_mb: +e.target.value });
+$("ph-speed-btn").onclick = async () => {
+  try { await api.speedTest(); } catch (err) { toast(String(err)); }
+};
+$("ph-devices").onclick = (e) => {
+  const b = e.target.closest("button[data-device]");
+  if (!b) return;
+  b.disabled = true;
+  phoneChange({ [b.dataset.paused === "true" ? "resume" : "pause"]: b.dataset.device });
+};
+
+function show(view) { for (const v of ["welcome", "setup", "status"]) $(v).hidden = v !== view; }
+
+function render() {
+  if (!state) return;
+  $("version").textContent = "Sürüm " + state.version;
+  if (setup) { show("setup"); renderSetup(); return; }
+  if (!state.installed) { show("welcome"); return; }
+  show("status");
+  const v = state.view;
+  const label = $("st-label");
+  label.className = "status tone-" + v.tone;
+  label.lastElementChild.textContent = v.label;
+  $("st-dot").classList.toggle("pulse", v.tone === "warn");
+  $("st-headline").textContent = v.headline;
+  $("st-body").textContent = v.body;
+  $("st-connect").hidden = state.onNetwork || !state.network;
+  $("d-network").textContent = state.network + (state.next ? "  →  " + state.next : "");
+  $("d-name").textContent = state.name;
+  // The phone's installed app, as it says itself; what it offers to install is another thing (the newest APK it has,
+  // perhaps brought by this computer and not installed yet).
+  const offered = state.phoneAppName || "";
+  const onPhone = state.phone?.version || "";
+  $("d-versions").textContent = "Bilgisayar " + (state.installedVersion || state.version) +
+    (onPhone ? "  ·  Telefon " + onPhone : offered ? "  ·  Telefonda " + offered + " hazır" : "");
+  const waiting = onPhone && offered && versionCode(offered) > versionCode(onPhone);
+  $("d-versions-wait").hidden = !waiting;
+  if (waiting) $("d-versions-wait").textContent = "Telefonda " + offered + " kurulmayı bekliyor: telefonda Kur'a dokun.";
+  const aj = $("autojoin");
+  aj.setAttribute("aria-checked", String(state.autoJoin));
+  $("d-autojoin-caption").textContent = state.autoJoin
+    ? "Telefonda paylaşım başlayınca bu bilgisayar kendiliğinden bağlanır; paylaşım bitince eski Wi-Fi ağına döner."
+    : "Kapalı. Telefonun Wi-Fi ağına kendin bağlanırsın; internet yine kendiliğinden gelir.";
+  $("upgrade").hidden = !state.canUpgrade;
+  $("upgrade-text").innerHTML = state.installedVersion
+    ? `Bu dosya AleShare <b>${esc(state.version)}</b> sürümü; bilgisayarda ${esc(state.installedVersion)} kurulu.`
+    : `Bu dosya AleShare <b>${esc(state.version)}</b> sürümü; bilgisayarda kurulu olandan farklı.`;
+  // A newer release on GitHub, and the button that downloads and installs it.
+  const on = state.online && state.online.name ? state.online : null;
+  $("online").hidden = !on;
+  if (on) {
+    $("online-text").innerHTML = updating
+      ? `AleShare <b>${esc(on.name)}</b> indiriliyor ve kuruluyor…`
+      : `AleShare <b>${esc(on.name)}</b> yayımlandı (${bytes(on.size)}).`;
+  }
+  $("log").innerHTML = (state.log || []).map((l) => `<div>${esc(l)}</div>`).join("") || "<div>Kayıt yok.</div>";
+  renderPhone();
+  for (const b of ["autojoin", "repair", "uninstall", "upgrade-btn", "online-btn", "connect"]) $(b).disabled = busy;
+}
+
+function renderSetup() {
+  $("steps").innerHTML = STEPS.map(([id, title], i) => {
+    const s = setup.steps[id] || { state: "pending" };
+    const mark = s.state === "done" ? icon("check", "s16") : `<span>${i + 1}</span>`;
+    return `<li class="step ${s.state}"><div class="mark">${mark}</div><div class="grow">
+      <div class="title">${title}</div>${s.detail ? `<div class="caption">${esc(s.detail)}</div>` : ""}</div></li>`;
+  }).join("");
+  const end = $("setup-end");
+  if (!setup.ending) { end.hidden = true; return; }
+  $("ask").hidden = true;
+  end.hidden = false;
+  if (setup.ending === "finished") {
+    end.innerHTML = `<div class="hero ok"><div class="big">${icon("check")}</div><h2>Kurulum tamamlandı</h2></div>
+      <p class="muted" style="text-align:center">Telefonda paylaşımı başlatınca bu bilgisayar kendiliğinden bağlanır. Bu pencereyi kapatabilirsin; AleShare'i <b>Başlat menüsünde</b> bulursun.</p>
+      <button class="btn" id="end-ok">Tamam</button>`;
+    $("end-ok").onclick = () => { setup = null; render(); };
+  } else {
+    const text = setup.ending === "cancelled" ? "Kurulum iptal edildi." : setup.error;
+    end.innerHTML = `<div class="banner error">${icon("alert")}<div class="grow" style="white-space:pre-line">${esc(text)}</div></div>
+      <button class="btn" id="end-retry">Yeniden dene</button>
+      <button class="text-btn" id="end-close" style="width:100%;justify-content:center">Vazgeç</button>`;
+    $("end-retry").onclick = startSetup;
+    $("end-close").onclick = () => { setup = null; render(); };
+  }
+}
+
+function newSetup() {
+  setup = { steps: {}, ending: null };
+  $("ask").hidden = true;
+  setup.steps.wireguard = { state: "active", detail: "Bakılıyor…" };
+}
+
+// ---- what the user is asked during the setup ----
+function askPassword(ssid, retry) {
+  const ask = $("ask");
+  ask.hidden = false;
+  ask.innerHTML = `<div class="row">${icon("wifi")}<h3 class="grow">${esc(ssid)}</h3></div>
+    <p class="muted">Bu ağın parolasını bir kez yaz. Parola, telefonda AleShare'in <b>Wi-Fi ağı</b> kartında; göz simgesine dokununca görünür.</p>
+    ${retry ? `<div class="banner error">${icon("alert")}<div class="grow">Bağlanılamadı; parola yanlış olabilir (8–63 karakter).</div></div>` : ""}
+    <div class="field"><input id="pw" type="password" autocomplete="off" spellcheck="false" placeholder="Wi-Fi parolası">
+      <button class="eye" id="pw-eye" title="Parolayı göster">${icon("eye")}</button></div>
+    <button class="btn" id="pw-ok" disabled>Bağlan</button>
+    <button class="text-btn" id="pw-cancel" style="width:100%;justify-content:center">Kurulumu iptal et</button>`;
+  const pw = $("pw"), ok = $("pw-ok");
+  pw.focus();
+  pw.oninput = () => { ok.disabled = pw.value.length < 8 || pw.value.length > 63; };
+  pw.onkeydown = (e) => { if (e.key === "Enter" && !ok.disabled) ok.click(); };
+  $("pw-eye").onclick = () => {
+    const showing = pw.type === "text";
+    pw.type = showing ? "password" : "text";
+    $("pw-eye").innerHTML = icon(showing ? "eye" : "eye-off");
+  };
+  ok.onclick = () => { ask.hidden = true; api.answer(pw.value, true); pw.value = ""; };
+  $("pw-cancel").onclick = () => { ask.hidden = true; api.answer("", false); };
+}
+
+function askChoice(question, options) {
+  const ask = $("ask");
+  ask.hidden = false;
+  ask.innerHTML = `<h3>${esc(question)}</h3>` +
+    options.map((o, i) => `<label class="choice"><input type="radio" name="net" value="${esc(o)}" ${i ? "" : "checked"}><span class="mono">${esc(o)}</span></label>`).join("") +
+    `<button class="btn" id="choose-ok">Devam</button>`;
+  $("choose-ok").onclick = () => {
+    const picked = ask.querySelector("input:checked");
+    ask.hidden = true;
+    api.answer(picked ? picked.value : options[0], true);
+  };
+}
+
+function showQR(svg) {
+  const ask = $("ask");
+  ask.hidden = false;
+  ask.innerHTML = `<h3>Telefonla okut</h3>
+    <div class="qr">${svg}</div>
+    <ol class="howto">
+      <li><span>Telefonda AleShare'de <b>Paylaş</b> sekmesini aç.</span></li>
+      <li><span><b>Cihazlar → Ekle → Bilgisayar</b>'a dokun.</span></li>
+      <li><span>Kamerayı bu koda tut; bilgisayar kendiliğinden eklenir.</span></li>
+    </ol>
+    <div class="waiting"><span class="spinner"></span>Telefonun okuması bekleniyor</div>`;
+}
+
+function showNumber(sas) {
+  const ask = $("ask");
+  ask.hidden = false;
+  ask.innerHTML = `<h3>Numarayı karşılaştır</h3>
+    <p class="muted">Telefondaki AleShare eski bir sürüm; QR yerine numarayla eşleşiliyor.</p>
+    <div class="sas">${esc(sas.slice(0, 3))} ${esc(sas.slice(3))}</div>
+    <p class="muted">Telefonda aynı numara görünüyorsa <b>Eşleştir</b>'e, farklıysa <b>Reddet</b>'e dokun.</p>`;
+}
+
+// ---- events from the Go side ----
+window.hsEvent = (e) => {
+  switch (e.type) {
+    case "state": state = e.state; break;
+    case "step":
+      if (!setup) newSetup();
+      for (const [id] of STEPS) { // the steps before this one are behind us
+        if (id === e.step) break;
+        if (setup.steps[id]?.state !== "done") setup.steps[id] = { state: "done", detail: setup.steps[id]?.detail || "" };
+      }
+      setup.steps[e.step] = { state: "active", detail: e.detail };
+      if (e.step !== "pair") $("ask").hidden = true;
+      break;
+    case "done": if (setup) setup.steps[e.step] = { state: "done", detail: e.detail }; if (e.step === "pair") $("ask").hidden = true; break;
+    case "password": if (setup) setup.steps.wifi = { state: "active", detail: e.ssid + " ağının parolası gerekiyor" }; askPassword(e.ssid, e.retry); break;
+    case "choose": askChoice(e.detail, e.options); break;
+    case "qr": if (setup) setup.steps.pair = { state: "active", detail: "Kodu telefonun kamerasıyla okut" }; showQR(e.svg); break;
+    case "number": showNumber(e.detail); break;
+    case "finished": if (setup) { setup.ending = "finished"; } break;
+    case "failed":
+      if (setup) {
+        setup.ending = "failed"; setup.error = e.error;
+        for (const [id] of STEPS) if (setup.steps[id]?.state === "active") setup.steps[id].state = "failed";
+      }
+      break;
+    case "cancelled": if (setup) setup.ending = "cancelled"; break;
+    case "speed": renderSpeed(e.speed); return;
+    case "action": {
+      busy = false; updating = false;
+      const done = { online: "Güncellendi; pencere yeniden açılıyor", autojoin: "Otomatik bağlanma " + (state?.autoJoin ? "açık" : "kapalı"), upgrade: "Güncellendi", uninstall: "AleShare kaldırıldı", phone: "Telefon güncellendi" };
+      if (e.action === "phone" && e.error) for (const k in pending) delete pending[k];
+      toast(e.error ? e.error : done[e.action]);
+      break;
+    }
+  }
+  render();
+};
+
+async function startSetup() {
+  $("welcome-error").hidden = true;
+  try {
+    newSetup();
+    render();
+    await api.startSetup();
+  } catch (err) {
+    setup = null;
+    render();
+    const box = $("welcome-error");
+    box.hidden = false;
+    box.querySelector(".grow").textContent = String(err);
+  }
+}
+
+let updating = false; // the newer release from GitHub is being downloaded and installed
+async function act(fn, ...args) {
+  busy = true;
+  render();
+  try { await fn(...args); } catch (err) { busy = false; toast(String(err)); render(); }
+}
+
+let toastTimer;
+function toast(text) {
+  const t = $("toast");
+  t.textContent = text;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 3200);
+}
+
+$("start").onclick = startSetup;
+$("repair").onclick = startSetup;
+$("connect").onclick = () => { api.connect(); toast("Bağlanılıyor…"); };
+$("autojoin").onclick = () => act(api.setAutoJoin, !state.autoJoin);
+$("upgrade-btn").onclick = () => act(api.upgrade);
+$("online-btn").onclick = () => { updating = true; act(api.online).then(() => { if (!busy) { updating = false; render(); } }); };
+$("uninstall").onclick = () => { $("confirm").hidden = false; };
+$("confirm-no").onclick = () => { $("confirm").hidden = true; };
+$("confirm-yes").onclick = () => { $("confirm").hidden = true; act(api.uninstall); };
+$("open-log").onclick = () => api.openLog();
+$("licenses").onclick = () => api.licenses();
+for (const [toggle, body] of [["adv-toggle", "adv"], ["ph-settings-toggle", "ph-settings"]]) {
+  $(toggle).onclick = () => {
+    const open = $(body).hidden;
+    $(body).hidden = !open;
+    $(toggle).setAttribute("aria-expanded", String(open));
+  };
+}
+document.addEventListener("contextmenu", (e) => { if (!e.target.closest("input,.log")) e.preventDefault(); });
+
+(async () => {
+  const b = await api.boot();
+  state = b.state;
+  if (b.setup) newSetup();
+  render();
+})();
+
+// ---- a stand-in for looking at the page in a browser: buttons to walk through the states ----
+function preview() {
+  const base = {
+    installed: true, elevated: false, version: "1.0.12", installedVersion: "1.0.11", canUpgrade: true, name: "DESKTOP-EV", phoneApp: 12, phoneAppName: "1.0.12",
+    network: "DIRECT-HS-K7PM", next: "", autoJoin: true, onNetwork: true, tunnel: "running",
+    view: { tone: "ok", label: "Bağlı", headline: "Telefona bağlı", body: "Bu bilgisayar interneti telefonun mobil verisinden alıyor." },
+    online: { name: "1.0.40", size: 8.5 * 1024 * 1024 },
+    log: ["2026-11-01 16:05:45  telefonun agi goruldu, tunel aciliyor", "2026-11-01 17:46:54  guncellendi"],
+    phone: {
+      version: "1.0.18", battery: 81, charging: true, network: "5G", signal: 3, today: 1.4 * 1024 * 1024 * 1024, limit_mb: 5120,
+      down_bps: 3_400_000, up_bps: 180_000, blocked: 1243, split: false, ads: true, saver: false, priority: true, guard: true, hot: true, band: "5",
+      plan: { limit_mb: 30720, used: 21.3 * 1024 * 1024 * 1024, days_left: 9, per_day: 1.0 * 1024 * 1024 * 1024, whole_phone: true },
+      devices: [{ name: "Laptop", today: 1.2 * 1024 * 1024 * 1024, limit_mb: 0, speed_kbps: 5000, quiet: "", guest: "", paused: "none" },
+        { name: "Tab", today: 210 * 1024 * 1024, limit_mb: 1024, speed_kbps: 0, quiet: "23:00–07:00", guest: "", paused: "quiet" },
+        { name: "Misafir", today: 80 * 1024 * 1024, limit_mb: 0, speed_kbps: 0, quiet: "", guest: "Misafir · 45 dk kaldı", paused: "none" }],
+    },
+  };
+  const qr = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 21 21" shape-rendering="crispEdges"><rect width="21" height="21" fill="#fff"/><path d="M0 0h7v7h-7zM14 0h7v7h-7zM0 14h7v7h-7zM9 9h3v3h-3zM15 15h3v3h-3z" fill="#101820"/></svg>';
+  const fire = (e) => setTimeout(() => window.hsEvent(e), 0);
+  const scenes = {
+    "Bağlı": () => fire({ type: "state", state: base }),
+    "Bekliyor": () => fire({ type: "state", state: { ...base, onNetwork: false, tunnel: "stopped", canUpgrade: false,
+      view: { tone: "idle", label: "Beklemede", headline: "Telefon bekleniyor", body: "Telefonda paylaşımı başlatınca bu bilgisayar kendiliğinden bağlanır (DIRECT-HS-K7PM)." } } }),
+    "Yanıt yok": () => fire({ type: "state", state: { ...base, canUpgrade: false,
+      view: { tone: "warn", label: "Yanıt yok", headline: "Telefon yanıt vermiyor", body: "Telefonun Wi-Fi ağı görünüyor ama paylaşım yanıt vermiyor. Telefonda paylaşımın açık olduğuna bak; bilgisayar birazdan yeniden dener." } } }),
+    "Kurulu değil": () => { setup = null; fire({ type: "state", state: { ...base, installed: false } }); },
+    "Kurulum": () => { newSetup(); fire({ type: "done", step: "wireguard", detail: "WireGuard kurulu" }); fire({ type: "step", step: "wifi", detail: "Telefonun Wi-Fi ağı aranıyor." }); },
+    "Parola": () => { if (!setup) newSetup(); fire({ type: "password", step: "wifi", ssid: "DIRECT-HS-K7PM", retry: false }); },
+    "QR": () => { if (!setup) newSetup(); fire({ type: "done", step: "wifi", detail: "Telefonun ağına bağlı: DIRECT-HS-K7PM" }); fire({ type: "qr", step: "pair", svg: qr }); },
+    "Bitti": () => { if (!setup) newSetup(); for (const [id] of STEPS) fire({ type: "done", step: id, detail: "Tamam" }); fire({ type: "finished" }); },
+    "Hata": () => { if (!setup) newSetup(); fire({ type: "failed", error: "WireGuard kurulamadı: WireGuard'ın sitesine ulaşılamadı.\n(Bir kez internet gerekir.)" }); },
+  };
+  addEventListener("DOMContentLoaded", () => {
+    const bar = document.createElement("div");
+    bar.className = "preview-bar";
+    for (const [name, go] of Object.entries(scenes)) {
+      const b = document.createElement("button");
+      b.textContent = name;
+      b.onclick = go;
+      bar.append(b);
+    }
+    document.body.append(bar);
+  });
+  const later = (v) => new Promise((r) => setTimeout(() => r(v), 400));
+  return {
+    boot: async () => ({ state: base, setup: false }),
+    startSetup: async () => scenes["Kurulum"](),
+    answer: () => scenes["QR"](),
+    setAutoJoin: async (on) => { base.autoJoin = on; await later(); window.hsEvent({ type: "state", state: base }); window.hsEvent({ type: "action", action: "autojoin" }); },
+    upgrade: async () => { await later(); base.canUpgrade = false; window.hsEvent({ type: "state", state: base }); window.hsEvent({ type: "action", action: "upgrade" }); },
+    uninstall: async () => { await later(); window.hsEvent({ type: "state", state: { ...base, installed: false } }); window.hsEvent({ type: "action", action: "uninstall" }); },
+    connect: async () => {},
+    openLog: async () => {},
+    licenses: async () => {},
+    phone: async (c) => {
+      await later();
+      if ("pause" in c || "resume" in c) {
+        const d = base.phone.devices.find((x) => x.name === (c.pause || c.resume));
+        if (d) d.paused = c.pause ? "manual" : "none";
+      } else Object.assign(base.phone, c);
+      window.hsEvent({ type: "state", state: base });
+      window.hsEvent({ type: "action", action: "phone" });
+    },
+    online: async () => { await later(); await later(); base.online = { name: "", size: 0 }; base.installedVersion = "1.0.40"; window.hsEvent({ type: "state", state: base }); window.hsEvent({ type: "action", action: "online" }); },
+    speedTest: async () => {
+      const r = { stage: "wifi" };
+      fire({ type: "speed", speed: { ...r } });
+      await later();
+      Object.assign(r, { stage: "mobile", wifiDown: 182_000_000, wifiUp: 140_000_000 });
+      fire({ type: "speed", speed: { ...r } });
+      await later();
+      fire({ type: "speed", speed: { ...r, stage: "done", mobile: { down_bps: 64_300_000, up_bps: 18_200_000, ping_ms: 31, bytes: 52 * 1024 * 1024 } } });
+    },
+  };
+}
+</script>
+</body>
+</html>

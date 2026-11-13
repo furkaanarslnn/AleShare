@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launcher icon: the hotspot sign, a dot with two arcs around it. Written by core/cmd/hotspot-pc/winres/icon_gen.go: change the drawing there. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="2.2"
+        android:scaleY="2.2"
+        android:translateX="27.6"
+        android:translateY="27.6">
+        <path
+            android:fillColor="#00000000"
+            android:pathData="M8.04 17.36A5.6 5.6 0 1 1 15.96 17.36M5.21 20.19A9.6 9.6 0 1 1 18.79 20.19"
+            android:strokeColor="#0B6B80"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:strokeWidth="1.7" />
+        <path
+            android:fillColor="#00000000"
+            android:pathData="M11.99 13.4L12.01 13.4"
+            android:strokeColor="#0B6B80"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:strokeWidth="4" />
+    </group>
+</vector>

@@ -1,0 +1,51 @@
+package dev.hotspot.app.ui.theme
+
+import androidx.compose.ui.graphics.Color
+
+// One accent (deep teal) on neutral, slightly cool greys. Green and amber only ever mean "on" and "attention".
+
+// Light
+val primaryLight = Color(0xFF0B6B80)
+val onPrimaryLight = Color(0xFFFFFFFF)
+val primaryContainerLight = Color(0xFFD6EEF4)
+val onPrimaryContainerLight = Color(0xFF07323C)
+val secondaryLight = Color(0xFF4A5A66)
+val secondaryContainerLight = Color(0xFFE7ECEF)
+val onSecondaryContainerLight = Color(0xFF1C2A33)
+val backgroundLight = Color(0xFFF5F7F8)
+val surfaceLight = Color(0xFFFFFFFF)
+val onSurfaceLight = Color(0xFF101820)
+val surfaceVariantLight = Color(0xFFEDF1F3)
+val onSurfaceVariantLight = Color(0xFF56626C)
+val outlineLight = Color(0xFFB9C3CA)
+val outlineVariantLight = Color(0xFFE2E7EA)
+val errorLight = Color(0xFFBA2B2B)
+val errorContainerLight = Color(0xFFFBE4E2)
+val onErrorContainerLight = Color(0xFF5C1212)
+val okLight = Color(0xFF1F8A5B)
+val warnLight = Color(0xFFB76E00)
+val warnContainerLight = Color(0xFFFCEBCB)
+val onWarnContainerLight = Color(0xFF4A2D00)
+
+// Dark
+val primaryDark = Color(0xFF5CC8E0)
+val onPrimaryDark = Color(0xFF00313B)
+val primaryContainerDark = Color(0xFF0F4756)
+val onPrimaryContainerDark = Color(0xFFC9EEF7)
+val secondaryDark = Color(0xFFA9B7C2)
+val secondaryContainerDark = Color(0xFF232C33)
+val onSecondaryContainerDark = Color(0xFFD4DEE5)
+val backgroundDark = Color(0xFF0D1114)
+val surfaceDark = Color(0xFF151A1F)
+val onSurfaceDark = Color(0xFFE6EAED)
+val surfaceVariantDark = Color(0xFF1E252B)
+val onSurfaceVariantDark = Color(0xFF9AA6B0)
+val outlineDark = Color(0xFF3A4651)
+val outlineVariantDark = Color(0xFF27303A)
+val errorDark = Color(0xFFFF8A80)
+val errorContainerDark = Color(0xFF4A1C1C)
+val onErrorContainerDark = Color(0xFFFFDAD6)
+val okDark = Color(0xFF4CC38A)
+val warnDark = Color(0xFFF0B04A)
+val warnContainerDark = Color(0xFF3A2A0C)
+val onWarnContainerDark = Color(0xFFFBE3B8)

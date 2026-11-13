@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Corner of the home screen widget; Android 12+ gives the launcher's own (values-v31). -->
+    <dimen name="widget_radius">20dp</dimen>
+</resources>

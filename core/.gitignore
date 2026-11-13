@@ -1,0 +1,4 @@
+# Sunucu anahtarlarini ve istemci listesini icerir.
+state/
+*.exe
+*.png

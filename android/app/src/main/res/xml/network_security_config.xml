@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Plain HTTP only to the sharing phone's own address on its Wi-Fi Direct network (always 192.168.49.1), where the
+  phones and tablets take a newer release from it and bring theirs (see Core.SetAppUpdate). What travels there needs
+  no secrecy, and Android checks an APK's signature before it installs it. Everything else stays HTTPS only.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">192.168.49.1</domain>
+    </domain-config>
+</network-security-config>
