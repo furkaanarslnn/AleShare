@@ -12,10 +12,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/windows"
 
 	"hotspot/core/internal/pairing"
 	"hotspot/core/internal/wifiinfo"
@@ -188,7 +191,9 @@ func installWireGuard(ui setupUI) error {
 }
 
 // installWireGuardMSI downloads the newest package for this computer from download.wireguard.com, makes sure
-// Windows finds it signed by WireGuard LLC, and installs it quietly.
+// Windows finds it signed by WireGuard LLC, and installs it quietly. The file lies in the private folder meanwhile:
+// in the temporary folder, anything running as the user could swap it between the check and the installation,
+// which runs with administrator rights.
 func installWireGuardMSI() error {
 	client := &http.Client{Timeout: 2 * time.Minute}
 	resp, err := client.Get(wireGuardDownloads)
@@ -204,7 +209,7 @@ func installWireGuardMSI() error {
 	if !ok {
 		return errors.New("WireGuard'ın sitesinde bu bilgisayara uygun paket bulunamadı")
 	}
-	path := filepath.Join(os.TempDir(), name)
+	path := filepath.Join(privateDir(), name)
 	defer os.Remove(path)
 	resp, err = client.Get(wireGuardDownloads + name)
 	if err != nil {
@@ -261,6 +266,7 @@ func joinPhoneWifi(ui setupUI) (phone, profile string, err error) {
 	ui.Step(stepWifi, "Telefonun Wi-Fi ağı aranıyor. Telefonda AleShare'i aç ve Paylaşımı başlat'a dokun.")
 	deadline := time.Now().Add(10 * time.Minute)
 	retry := false
+	failed := map[string]int{} // how often the profile Windows had for a network did not get this computer onto it
 	for time.Now().Before(deadline) {
 		if phone, profile, ok := onPhoneNetwork(); ok {
 			return phone, profile, nil
@@ -279,8 +285,11 @@ func joinPhoneWifi(ui setupUI) (phone, profile string, err error) {
 		}
 		profiles, _ := command("netsh.exe", "wlan", "show", "profiles").Output()
 		added := false
-		if !profileListed(string(profiles), ssid) {
-			password, ok := ui.Password(ssid, retry)
+		// A profile Windows kept from before may hold a password the phone no longer uses (the user changed it, or
+		// the app was installed anew). After it failed twice it is written anew, like one that was never there.
+		stale := failed[ssid] >= 2
+		if !profileListed(string(profiles), ssid) || stale {
+			password, ok := ui.Password(ssid, retry || stale)
 			if !ok {
 				return "", "", errCancelled
 			}
@@ -303,6 +312,7 @@ func joinPhoneWifi(ui setupUI) (phone, profile string, err error) {
 			_ = deleteWifiProfile(ssid) // most likely a wrong password: ask again
 			retry = true
 		} else {
+			failed[ssid]++
 			ui.Step(stepWifi, ssid+" ağına bağlanılamadı, yeniden deneniyor…")
 		}
 	}
@@ -347,39 +357,161 @@ func runQRPairing(ui setupUI, phoneIP, name string) (*pairing.Result, error) {
 	return nil, errors.New("10 dakika içinde kod okutulmadı")
 }
 
-// lock restricts a directory to SYSTEM and administrators (and, optionally, read access for users).
+// lock makes a folder the administrators', open to SYSTEM and administrators only (and, with usersRead, to users
+// for reading: the window runs without rights). The whole access list is replaced, not added to: an entry someone
+// put there before must not survive.
 func lock(dir string, usersRead bool) error {
-	args := []string{dir, "/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"}
+	sddl := "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
 	if usersRead {
-		args = append(args, "*S-1-5-32-545:(OI)(CI)RX")
+		sddl += "(A;OICI;FRFX;;;BU)"
 	}
-	if out, err := command("icacls.exe", args...).CombinedOutput(); err != nil {
-		return fmt.Errorf("icacls %s: %w: %s", dir, err, strings.TrimSpace(string(out)))
+	sd, err := windows.SecurityDescriptorFromString(sddl)
+	if err != nil {
+		return err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
+	}
+	// The owner first: whoever owns a folder may rewrite its access list, whatever the list says. Taking a folder
+	// from someone else needs a privilege that icacls switches on for itself.
+	_ = command("icacls.exe", dir, "/setowner", "*S-1-5-32-544", "/L", "/Q").Run()
+	err = windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+	if err != nil {
+		return fmt.Errorf("%s korunamadı: %w", dir, err)
+	}
+	got, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("%s korunamadı: %w", dir, err)
+	}
+	if owner, _, err := got.Owner(); err != nil || !trustedOwner(owner) {
+		return fmt.Errorf("%s başka bir hesabın ve yöneticilere devredilemedi", dir)
 	}
 	return nil
 }
 
-// installSelf puts this program at installedExe. The scheduled task may be running the installed copy at this very
-// moment, and Windows refuses to overwrite a running program but lets it be renamed: the old file is moved aside,
-// the new one copied in, and the old one removed when it is no longer running (or at the next install).
+// trustedOwner reports whether owner is the administrators, SYSTEM, or the account this process runs as (which
+// has administrator rights wherever this is asked).
+func trustedOwner(owner *windows.SID) bool {
+	if owner == nil {
+		return false
+	}
+	if owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) || owner.IsWellKnown(windows.WinLocalSystemSid) {
+		return true
+	}
+	me, err := windows.GetCurrentProcessToken().GetTokenUser()
+	return err == nil && windows.EqualSid(owner, me.User.Sid)
+}
+
+// isLink reports whether path is a link to somewhere else (a junction, a symbolic link).
+func isLink(path string) bool {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return false
+	}
+	attrs, err := windows.GetFileAttributes(p)
+	return err == nil && attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+// removeLinks takes the links out of a folder (the links themselves, not what they lead to).
+func removeLinks(dir string) {
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if path := filepath.Join(dir, e.Name()); isLink(path) {
+			_ = os.Remove(path)
+		}
+	}
+}
+
+// makeFolders makes the program's folder and the private one inside it, and makes sure both are the
+// administrators'. Any user may make a folder in %ProgramData%: one made before the installation would stay its
+// maker's, with whatever was put into it, and its maker could then swap the program that the watcher service runs
+// as SYSTEM. So the folders are taken over, and so is everything that lies in them already; a link standing in
+// for one of them is removed, since nothing may be written through it to somewhere else.
+func makeFolders() error {
+	for _, dir := range []string{dataDir(), privateDir()} {
+		if isLink(dir) {
+			if err := os.Remove(dir); err != nil {
+				return fmt.Errorf("%s bir bağlantı ve kaldırılamadı: %w", dir, err)
+			}
+		}
+	}
+	// Links inside the folder go first, and once more below when the folder is the administrators' and nobody
+	// else can put one back.
+	removeLinks(dataDir())
+	if err := os.MkdirAll(privateDir(), 0o755); err != nil {
+		return err
+	}
+	if err := lock(dataDir(), true); err != nil {
+		return err
+	}
+	if err := lock(privateDir(), false); err != nil {
+		return err
+	}
+	for _, dir := range []string{dataDir(), privateDir()} {
+		removeLinks(dir)
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			path := filepath.Join(dir, e.Name())
+			if strings.EqualFold(path, privateDir()) {
+				continue // has its own list, set above
+			}
+			if isLink(path) {
+				continue // could not be removed: left alone, never followed
+			}
+			_ = command("icacls.exe", path, "/setowner", "*S-1-5-32-544", "/T", "/C", "/L", "/Q").Run()
+			_ = command("icacls.exe", path, "/reset", "/T", "/C", "/L", "/Q").Run()
+		}
+	}
+	return nil
+}
+
+// installSelf puts this program at installedExe. The watcher service, the icon or a window may be running the
+// installed copy at this very moment, and Windows refuses to overwrite a running program but lets it be renamed:
+// the old file is moved aside, the new one copied in, and what was moved aside is removed once nothing runs it any
+// more (here, or at the next install). A window left open across two upgrades still runs the file the first one
+// moved aside, so the second one moves under another name.
 func installSelf(self string) error {
 	dst := installedExe()
 	if strings.EqualFold(self, dst) {
 		return nil
 	}
-	old := dst + ".old"
-	_ = os.Remove(old)
+	sweepAside(dst)
+	aside := ""
 	if _, err := os.Stat(dst); err == nil {
-		if err := os.Rename(dst, old); err != nil {
+		for i := 0; ; i++ {
+			aside = dst + ".old"
+			if i > 0 {
+				aside += strconv.Itoa(i)
+			}
+			if _, err := os.Stat(aside); os.IsNotExist(err) {
+				break
+			}
+			if i == 50 {
+				return errors.New("eski program dosyaları silinemiyor; açık AleShare pencerelerini kapatıp yeniden dene")
+			}
+		}
+		if err := os.Rename(dst, aside); err != nil {
 			return err
 		}
 	}
 	if err := copyFile(self, dst); err != nil {
-		_ = os.Rename(old, dst) // keep the installation working
+		if aside != "" {
+			_ = os.Rename(aside, dst) // keep the installation working
+		}
 		return err
 	}
-	_ = os.Remove(old)
+	sweepAside(dst)
 	return nil
+}
+
+// sweepAside removes the program files that earlier installs moved aside and that nothing runs any more.
+func sweepAside(dst string) {
+	old, _ := filepath.Glob(dst + ".old*")
+	for _, p := range old {
+		_ = os.Remove(p)
+	}
 }
 
 func copyFile(src, dst string) error {
@@ -444,7 +576,13 @@ type setupOptions struct {
 
 func doSetup(opts setupOptions, ui setupUI) error {
 	phoneFlag, profileFlag, pairVia, name := opts.phone, opts.profile, opts.pairVia, opts.name
-	// WireGuard first: it is downloaded, and on the phone's network there is no internet until the tunnel is up.
+	// The folders before anything else: WireGuard's package is downloaded into the private one, and the Wi-Fi
+	// password passes through it.
+	if err := makeFolders(); err != nil {
+		return err
+	}
+	// WireGuard before the phone's network: it is downloaded, and on that network there is no internet until the
+	// tunnel is up.
 	wg := findWireGuard()
 	if wg == "" {
 		if err := installWireGuard(ui); err != nil {
@@ -453,16 +591,10 @@ func doSetup(opts setupOptions, ui setupUI) error {
 		wg = findWireGuard()
 	}
 	ui.Done(stepWireGuard, "WireGuard kurulu")
-	// The folders before anything secret is written (the Wi-Fi password passes through the private one).
-	if err := os.MkdirAll(privateDir(), 0o755); err != nil {
-		return err
-	}
-	if err := lock(dataDir(), true); err != nil {
-		return err
-	}
-	if err := lock(privateDir(), false); err != nil {
-		return err
-	}
+	// An installation that is paired anew has a watcher service running: it keeps still until this is done (see
+	// holdSetup), or it would reopen the old tunnel in the middle of the pairing.
+	resume := holdSetup()
+	defer resume()
 
 	var phone, profile string
 	var err error
@@ -489,7 +621,8 @@ func doSetup(opts setupOptions, ui setupUI) error {
 		pairHost = pairVia
 	}
 	// An older tunnel of this program would block the pairing (it sends everything but its own packets
-	// into the tunnel), and the scheduled task would keep reopening it: keep both quiet until we are done.
+	// into the tunnel), and the watcher would keep reopening it: keep both quiet until we are done. (The pause
+	// below is for a watcher older than 1.2.2, which does not know holdSetup; a phone that answers ends it.)
 	if running, _ := tunnelRunning(); running {
 		_ = stopTunnel()
 	}
@@ -501,8 +634,15 @@ func doSetup(opts setupOptions, ui setupUI) error {
 		return err
 	}
 	ui.Done(stepPair, fmt.Sprintf("Telefonda %q olarak eklendi", name))
-	// Switching to the phone's network by itself is what makes it hands-off; "autojoin off" turns it off.
-	autoJoin := opts.autoJoin || !opts.autoJoinGiven
+	// Switching to the phone's network by itself is what makes it hands-off; "autojoin off" turns it off. Pairing
+	// an installation anew changes its keys, not what the user chose there.
+	autoJoin := opts.autoJoin
+	if !opts.autoJoinGiven {
+		autoJoin = true
+		if old, err := loadSettings(); err == nil {
+			autoJoin = old.AutoJoin
+		}
+	}
 
 	ui.Step(stepInstall, "Kurulum tamamlanıyor…")
 	self, err := os.Executable()
@@ -548,6 +688,7 @@ func doSetup(opts setupOptions, ui setupUI) error {
 
 	saveHealth(health{})
 	logf("kurulum tamamlandı: telefon %s, ağ %q, otomatik bağlanma %v", phone, profile, autoJoin)
+	resume() // the watcher looks again, and so does this run's own first look
 	if err := cmdReconcile(); err != nil {
 		return fmt.Errorf("kuruldu ama ilk durum ayarı başarısız: %w", err)
 	}
@@ -681,10 +822,18 @@ func addQuietFlags(fs *flag.FlagSet) quietFlags {
 // was started with them, so it never does.
 func (q quietFlags) needsRights() bool { return !*q.quiet && !isElevated() }
 
+// resultName is the only name a result file may have (see runElevated).
+var resultName = regexp.MustCompile(`^hotspot-result-\d+\.txt$`)
+
 // finish ends such a command: it hands its error to the window, or waits for the user to read the console.
 func (q quietFlags) finish(err error) error {
-	if err != nil && *q.result != "" {
-		_ = os.WriteFile(*q.result, []byte(err.Error()), 0o644)
+	if err != nil && resultName.MatchString(filepath.Base(*q.result)) {
+		// This process has administrator rights and the path came on its command line: it writes a new file of
+		// that one name and never over a file that is there.
+		if f, ferr := os.OpenFile(*q.result, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644); ferr == nil {
+			_, _ = f.WriteString(err.Error())
+			f.Close()
+		}
 	}
 	if *q.elevated && !*q.quiet {
 		waitEnter("\nKapatmak için Enter'a bas...")
@@ -742,10 +891,15 @@ func onOff(b bool) string {
 	return "kapalı"
 }
 
-// cmdReconcile makes the tunnel match the network. The scheduled task runs it on
-// every network event and once a minute, so it must be idempotent and cheap when
+// cmdReconcile makes the tunnel match the network. The watcher service runs it after
+// every change of the Wi-Fi and once a minute, so it must be idempotent and cheap when
 // nothing changed.
 func cmdReconcile() error {
+	if setupRunning() {
+		// A setup is pairing this computer anew. It closed the tunnel on purpose: the phone still answers the old
+		// keys until the new pairing is in, and reopening the tunnel with them would cut the pairing off.
+		return nil
+	}
 	defer lockReconcile()()
 	set, err := loadSettings()
 	if err != nil {
@@ -838,7 +992,7 @@ func cmdReconcile() error {
 	return nil
 }
 
-// cmdUpgrade installs this build's program and scheduled task over an existing
+// cmdUpgrade installs this build's program and watcher service over an existing
 // installation, without pairing again.
 func cmdUpgrade(args []string) error {
 	fs := flag.NewFlagSet("upgrade", flag.ContinueOnError)
@@ -898,6 +1052,9 @@ func doUpgrade() error {
 func upgradeFrom(src, name string) error {
 	if !inService {
 		stopWatchService()
+	}
+	if err := makeFolders(); err != nil {
+		logf("program klasörü korunamadı: %v", err) // an installation that works is not stopped for it
 	}
 	if err := installSelf(src); err != nil {
 		if !inService {
@@ -1004,8 +1161,8 @@ func cmdUninstall(args []string) error {
 	removeWatchService()
 	_ = command("schtasks.exe", "/Delete", "/TN", taskName, "/F").Run() // installations older than 1.0.21
 	removeTray()
-	// A run of the task that started a moment ago still holds the program file open. Only the task's runs (as
-	// SYSTEM): the window that asked for this uninstall is this program too.
+	// A run of the watcher that started a moment ago still holds the program file open. Only what runs as
+	// SYSTEM: the window that asked for this uninstall is this program too.
 	_ = command("taskkill.exe", "/F", "/FI", "IMAGENAME eq hotspot-pc.exe", "/FI", "USERNAME eq NT AUTHORITY\\SYSTEM",
 		"/FI", fmt.Sprintf("PID ne %d", os.Getpid())).Run()
 	say("Bağlantı kapatılıyor ve servisi siliniyor...")
@@ -1014,15 +1171,30 @@ func cmdUninstall(args []string) error {
 		_ = command(wg, "/uninstalltunnelservice", tunnelName).Run()
 	}
 	say("Yapılandırma (özel anahtar dahil) siliniyor...")
-	_ = os.RemoveAll(privateDir())
-	_ = os.Remove(settingsPath())
-	_ = os.Remove(healthPath())
-	_ = os.Remove(filepath.Join(dataDir(), "hotspot.log"))
+	// Windows forgets the phone's network too: it was saved to be joined by itself, and without the tunnel it
+	// leads nowhere. (Only a network the app opened: with -profile the setup may have been pointed at another.)
+	if set, err := loadSettings(); err == nil {
+		for _, ssid := range []string{set.Profile, set.Next} {
+			if strings.HasPrefix(ssid, directPrefix) {
+				_ = deleteWifiProfile(ssid)
+			}
+		}
+	}
+	// Everything in the folder but the program itself and what upgrades moved aside, which may still be running:
+	// the key, the settings, the log, what is known of the phone, the APK kept for it.
+	program := strings.ToLower(filepath.Base(installedExe()))
+	entries, _ := os.ReadDir(dataDir())
+	for _, e := range entries {
+		if !strings.HasPrefix(strings.ToLower(e.Name()), program) {
+			_ = os.RemoveAll(filepath.Join(dataDir(), e.Name()))
+		}
+	}
 	_ = os.Remove(shortcutPath())
 	_ = os.Remove(oldShortcutPath())
+	removeFolderLater(onlineDir()) // the user's part: what was learned of new releases, the window's browser data
 	if self, err := os.Executable(); err == nil && !strings.EqualFold(self, installedExe()) {
 		removeRetrying(installedExe())
-		removeRetrying(installedExe() + ".old")
+		sweepAside(installedExe())
 		_ = os.Remove(dataDir())
 	} else {
 		removeLater() // the installed program uninstalls itself: it goes once it has ended

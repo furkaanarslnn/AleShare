@@ -1,12 +1,16 @@
 package dev.hotspot.app
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.wifi.WifiManager
 import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pManager
 import android.os.Build
 import android.os.Looper
+import androidx.annotation.RequiresApi
+import androidx.core.content.ContextCompat
 import java.security.SecureRandom
 
 /** Name and password of the Wi-Fi network this app creates. Fixed, so a computer joins once and remembers it. */
@@ -34,9 +38,18 @@ object WifiNetwork {
   private const val PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
   private const val SSID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
+  /** A network for this run of the app only, while the saved one cannot be read (see [credentials]). */
+  private var temporary: WifiCredentials? = null
+
   /** The credentials; made up on first use and kept encrypted. */
+  @Synchronized
   fun credentials(context: Context): WifiCredentials {
     read(context, ENTRY)?.let { return it }
+    // Saved, but the keystore cannot read it today (see SecureStore): a network for this run only. The saved one,
+    // which the paired devices know, stays where it is for the day the keystore reads it again.
+    if (SecureStore.unreadable(ENTRY)) {
+      return temporary ?: WifiCredentials(PREFIX + random(SSID_ALPHABET, 4), randomPassword()).also { temporary = it }
+    }
     val created = WifiCredentials(PREFIX + random(SSID_ALPHABET, 4), randomPassword())
     write(context, ENTRY, created)
     return created
@@ -158,16 +171,28 @@ class WifiDirectGroup(context: Context) {
   fun create(credentials: WifiCredentials, done: (String?) -> Unit) {
     val m = manager
     val ch = channel
+    if (closed) return done(CLOSED)
     if (m == null || ch == null) return done("Bu telefonda Wi-Fi Direct yok.")
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return done("Kendi Wi-Fi ağını kurmak için Android 10 veya üstü gerekir.")
     // Wi-Fi Direct lives on the Wi-Fi radio: with Wi-Fi off it only fails, with a number that says nothing.
     if (wifi?.isWifiEnabled == false) return done(WIFI_OFF_TO_START)
+    // So does a missing permission ("hata 0"): say which one it is.
+    missingWifiPermission(appContext)?.let { return done(it) }
     try {
       m.requestGroupInfo(ch) { group ->
         when {
+          closed -> done(CLOSED)
           group != null && group.networkName == credentials.ssid -> done(null)
           group != null -> done("Başka bir uygulamanın Wi-Fi Direct grubu açık (${group.networkName}). Onu kapatıp yeniden dene.")
-          else -> open(m, ch, credentials, done)
+          else -> open(m, ch, credentials) { error ->
+            // Closed while it was opening (sharing was stopped meanwhile): a group that opened all the same goes.
+            if (error == null && closed) {
+              runCatching { m.removeGroup(ch, null) }
+              done(CLOSED)
+            } else {
+              done(error)
+            }
+          }
         }
       }
     } catch (_: SecurityException) {
@@ -181,6 +206,7 @@ class WifiDirectGroup(context: Context) {
    * scan in their region), then any 5 GHz channel the system picks (a phone joined to a 5 GHz network elsewhere may
    * have to share that channel), and 2.4 GHz when neither opens.
    */
+  @RequiresApi(Build.VERSION_CODES.Q)
   private fun open(m: WifiP2pManager, ch: WifiP2pManager.Channel, credentials: WifiCredentials, done: (String?) -> Unit) {
     val base = { WifiP2pConfig.Builder().setNetworkName(credentials.ssid).setPassphrase(credentials.passphrase).enablePersistentMode(false) }
     val tries = buildList {
@@ -200,7 +226,8 @@ class WifiDirectGroup(context: Context) {
               when (reason) {
                 WifiP2pManager.BUSY -> "Wi-Fi Direct meşgul (başka bir uygulama kullanıyor olabilir). Kapatıp tekrar dene."
                 WifiP2pManager.P2P_UNSUPPORTED -> "Bu telefon Wi-Fi Direct'i desteklemiyor."
-                else -> "Wi-Fi ağı kurulamadı (hata $reason). Wi-Fi açık mı?"
+                else -> "Wi-Fi ağı kurulamadı (hata $reason). Wi-Fi açık mı?" +
+                  if (Build.VERSION.SDK_INT < 33) " Android 12 ve altında konum da açık olmalı." else ""
               }
             )
           }
@@ -259,8 +286,18 @@ class WifiDirectGroup(context: Context) {
 
   private val handler = android.os.Handler(Looper.getMainLooper())
 
-  /** Closes the group, but only if it is ours. */
+  /** Set by [remove]: from then on this object opens no group any more. */
+  @Volatile
+  private var closed = false
+
+  /**
+   * Closes the group, but only if it is ours. Nothing of this object opens one afterwards: not a reopening that
+   * still waits its turn (see [replace]), nor an opening under way, whose group goes when it arrives (see
+   * [create]). Sharing that was stopped must not leave a network behind, or get one a few seconds later.
+   */
   fun remove(credentials: WifiCredentials) {
+    closed = true
+    handler.removeCallbacksAndMessages(null)
     val m = manager
     val ch = channel
     if (m == null || ch == null) return
@@ -274,9 +311,23 @@ class WifiDirectGroup(context: Context) {
   }
 
   private companion object {
+    const val CLOSED = "Paylaşım durduruldu."
     const val REOPEN_DELAY_MILLIS = 1_000L
     const val REOPEN_RETRY_MILLIS = 3_000L
     /** Channel 36, the lowest 5 GHz channel: allowed indoors everywhere, scanned by every adapter. */
     const val CHANNEL_36_MHZ = 5180
   }
+}
+
+/**
+ * Why the app may not open its Wi-Fi network, or null when it may: Android wants a permission for Wi-Fi Direct,
+ * "nearby devices" from Android 13 on and the precise location before that.
+ */
+internal fun missingWifiPermission(context: Context): String? {
+  val nearby = Build.VERSION.SDK_INT >= 33
+  val permission = if (nearby) Manifest.permission.NEARBY_WIFI_DEVICES else Manifest.permission.ACCESS_FINE_LOCATION
+  if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) return null
+  val where = "Ayarlar → Uygulamalar → AleShare → İzinler bölümünden ver, sonra yeniden başlat."
+  return if (nearby) "Wi-Fi ağını açmak için \"Yakındaki cihazlar\" izni gerekli. $where"
+  else "Wi-Fi ağını açmak için konum izni gerekli (\"Tam konum\" seçili olmalı). $where"
 }

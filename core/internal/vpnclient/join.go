@@ -75,10 +75,24 @@ func checkJoin(j joinJSON) (*Join, error) {
 		return nil, errors.New("vpnclient: the Wi-Fi name must be 1 to 32 bytes")
 	case len(j.P) < 8 || len(j.P) > 63:
 		return nil, errors.New("vpnclient: the Wi-Fi password must be 8 to 63 characters")
+	case !printable(j.P):
+		// What a WPA2 password may hold. Android refuses anything else outright, so a link that carried it (made
+		// by hand: the app never makes one) would end the app of whoever saved it, at every start.
+		return nil, errors.New("vpnclient: the Wi-Fi password must be plain ASCII characters")
 	}
 	c, err := Parse(j.C)
 	if err != nil {
 		return nil, err
 	}
 	return &Join{SSID: j.S, Password: j.P, Config: c, Text: j.C}, nil
+}
+
+// printable reports whether s holds only the printable ASCII characters, space to tilde.
+func printable(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < ' ' || s[i] > '~' {
+			return false
+		}
+	}
+	return true
 }

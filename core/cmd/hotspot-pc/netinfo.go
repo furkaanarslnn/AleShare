@@ -117,7 +117,7 @@ func parseDisconnect(out []byte) (wlanDisconnect, bool) {
 	return wlanDisconnect{Profile: html.UnescapeString(string(p[1])), Reason: reason, At: at}, true
 }
 
-// health is what the watchdog remembers between two runs of the scheduled task.
+// health is what the watchdog remembers between two looks of the watcher service.
 type health struct {
 	Fails       int       `json:"fails"`        // consecutive probes the phone did not answer
 	LastFail    time.Time `json:"last_fail"`    // when the latest of them was

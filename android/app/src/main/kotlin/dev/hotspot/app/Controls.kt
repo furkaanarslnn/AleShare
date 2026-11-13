@@ -60,7 +60,24 @@ object Controls {
 
   /** A device's daily limit in MiB; 0 means none. */
   fun deviceLimitMb(context: Context, name: String) = prefs(context).getLong(DEVICE_LIMIT + name, 0)
-  fun setDeviceLimitMb(context: Context, name: String, mb: Long) = prefs(context).edit().putLong(DEVICE_LIMIT + name, mb).apply()
+  fun setDeviceLimitMb(context: Context, name: String, mb: Long) {
+    val p = prefs(context)
+    if (p.getLong(DEVICE_LIMIT + name, 0) == mb) return
+    p.edit().apply {
+      putLong(DEVICE_LIMIT + name, mb)
+      // A pause for the old limit, or the pass the user gave past it, belongs to the old limit. The new one is
+      // judged afresh at the service's next look: a device still over it is paused again, another one goes on.
+      if (limitMark(p.getString(DEVICE_PAUSED + name, null))) remove(DEVICE_PAUSED + name)
+    }.apply()
+  }
+
+  /** Drops what was decided about a device that was removed: the next device of that name starts without it. */
+  fun forget(context: Context, name: String) {
+    prefs(context).edit().apply {
+      for (key in listOf(DEVICE_LIMIT, DEVICE_SPEED, DEVICE_QUIET, DEVICE_QUIET_SKIP, DEVICE_PAUSED)) remove(key + name)
+    }.apply()
+    synchronized(this) { applied.remove(name) }
+  }
 
   /** A device's speed limit in kilobits per second, each way; 0 means none. */
   fun deviceSpeedKbps(context: Context, name: String) = prefs(context).getLong(DEVICE_SPEED + name, 0)
@@ -226,6 +243,7 @@ object Controls {
     val (network, signal) = mobileSignal(context)
     return JSONObject()
       .put("version", runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "")
+      .put("code", runCatching { ownVersionCode(context) }.getOrDefault(0L)) // the release's number: a computer compares by it
       .put("battery", battery?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1)
       // Plugged in, from the battery's last broadcast: it changes the moment the cable does. ("Is it charging"
       // lags behind, and says no while plugged in when the phone holds its charge back to spare the battery.)
@@ -271,6 +289,9 @@ object Controls {
     return network to strength.level
   }
 }
+
+/** Whether a device's stored pause mark is about its daily limit (the day it ran out, or the user's pass for that day). */
+internal fun limitMark(stored: String?): Boolean = stored != null && stored != "manual"
 
 /** Whether a device used up its daily limit (0: no limit). */
 internal fun overLimit(used: Long, limit: Long): Boolean = limit > 0 && used >= limit

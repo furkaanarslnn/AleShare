@@ -24,6 +24,9 @@ class BootReceiver : BroadcastReceiver() {
     if (sharingAfter(intent.action, GatewayService.wasSharing(context))) {
       // Android lets an app start its foreground service right after it was updated.
       runCatching { GatewayService.start(context, ownNetwork = ownNetworkPreference(context)) }
+    } else {
+      // A mark that is not acted on now is a stale one: a later update must not act on it either.
+      GatewayService.forgetSharing(context)
     }
     // The VPN consent must still be there; asking for it needs a screen, so without it nothing starts.
     if (ClientService.wanted(context) && ClientStore.load(context) != null && VpnService.prepare(context) == null) {

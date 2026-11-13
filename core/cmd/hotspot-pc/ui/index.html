@@ -458,7 +458,6 @@ function shareOf(n) {
   const ones = ["", "i", "si", "ü", "ü", "i", "sı", "si", "i", "u"], tens = ["", "u", "si", "u", "ı", "si", "ı", "i", "i", "ı"];
   return "%" + n + "'" + (n % 10 ? ones[n % 10] : n % 100 ? tens[Math.floor(n / 10) % 10] : n ? "ü" : "ı");
 }
-function versionCode(v) { const m = /^1\.0\.(\d+)$/.exec(v || ""); return m ? +m[1] : 0; }
 function bitSpeed(bits) { return speed(bits / 8); }
 function bitPair(down, up) { return bitSpeed(down).replace(" Mbit/s", "") + " / " + bitSpeed(up); }
 
@@ -586,7 +585,7 @@ function render() {
   const onPhone = state.phone?.version || "";
   $("d-versions").textContent = "Bilgisayar " + (state.installedVersion || state.version) +
     (onPhone ? "  ·  Telefon " + onPhone : offered ? "  ·  Telefonda " + offered + " hazır" : "");
-  const waiting = onPhone && offered && versionCode(offered) > versionCode(onPhone);
+  const waiting = !!state.phoneWaiting && !!offered; // worked out by the program, which knows how releases are named
   $("d-versions-wait").hidden = !waiting;
   if (waiting) $("d-versions-wait").textContent = "Telefonda " + offered + " kurulmayı bekliyor: telefonda Kur'a dokun.";
   const aj = $("autojoin");
@@ -730,7 +729,8 @@ window.hsEvent = (e) => {
     case "cancelled": if (setup) setup.ending = "cancelled"; break;
     case "speed": renderSpeed(e.speed); return;
     case "action": {
-      busy = false; updating = false;
+      // A change on the phone is no operation of this window: it must not free the buttons while an upgrade runs.
+      if (e.action !== "phone") { busy = false; updating = false; }
       const done = { online: "Güncellendi; pencere yeniden açılıyor", autojoin: "Otomatik bağlanma " + (state?.autoJoin ? "açık" : "kapalı"), upgrade: "Güncellendi", uninstall: "AleShare kaldırıldı", phone: "Telefon güncellendi" };
       if (e.action === "phone" && e.error) for (const k in pending) delete pending[k];
       toast(e.error ? e.error : done[e.action]);
@@ -749,6 +749,7 @@ async function startSetup() {
   } catch (err) {
     setup = null;
     render();
+    if (state && state.installed) { toast(String(err)); return; } // pairing anew: the welcome page's box is not on the screen
     const box = $("welcome-error");
     box.hidden = false;
     box.querySelector(".grow").textContent = String(err);
@@ -800,13 +801,13 @@ document.addEventListener("contextmenu", (e) => { if (!e.target.closest("input,.
 // ---- a stand-in for looking at the page in a browser: buttons to walk through the states ----
 function preview() {
   const base = {
-    installed: true, elevated: false, version: "1.0.12", installedVersion: "1.0.11", canUpgrade: true, name: "DESKTOP-EV", phoneApp: 12, phoneAppName: "1.0.12",
+    installed: true, elevated: false, version: "1.2.2", installedVersion: "1.2.1", canUpgrade: true, name: "DESKTOP-EV", phoneApp: 42, phoneAppName: "1.2.2", phoneWaiting: true,
     network: "DIRECT-HS-K7PM", next: "", autoJoin: true, onNetwork: true, tunnel: "running",
     view: { tone: "ok", label: "Bağlı", headline: "Telefona bağlı", body: "Bu bilgisayar interneti telefonun mobil verisinden alıyor." },
-    online: { name: "1.0.40", size: 8.5 * 1024 * 1024 },
+    online: { name: "1.2.3", size: 8.5 * 1024 * 1024 },
     log: ["2026-11-01 16:05:45  telefonun agi goruldu, tunel aciliyor", "2026-11-01 17:46:54  guncellendi"],
     phone: {
-      version: "1.0.18", battery: 81, charging: true, network: "5G", signal: 3, today: 1.4 * 1024 * 1024 * 1024, limit_mb: 5120,
+      version: "1.2.1", battery: 81, charging: true, network: "5G", signal: 3, today: 1.4 * 1024 * 1024 * 1024, limit_mb: 5120,
       down_bps: 3_400_000, up_bps: 180_000, blocked: 1243, split: false, ads: true, saver: false, priority: true, guard: true, hot: true, band: "5",
       plan: { limit_mb: 30720, used: 21.3 * 1024 * 1024 * 1024, days_left: 9, per_day: 1.0 * 1024 * 1024 * 1024, whole_phone: true },
       devices: [{ name: "Laptop", today: 1.2 * 1024 * 1024 * 1024, limit_mb: 0, speed_kbps: 5000, quiet: "", guest: "", paused: "none" },
@@ -859,7 +860,7 @@ function preview() {
       window.hsEvent({ type: "state", state: base });
       window.hsEvent({ type: "action", action: "phone" });
     },
-    online: async () => { await later(); await later(); base.online = { name: "", size: 0 }; base.installedVersion = "1.0.40"; window.hsEvent({ type: "state", state: base }); window.hsEvent({ type: "action", action: "online" }); },
+    online: async () => { await later(); await later(); base.online = { name: "", size: 0 }; base.installedVersion = "1.2.3"; window.hsEvent({ type: "state", state: base }); window.hsEvent({ type: "action", action: "online" }); },
     speedTest: async () => {
       const r = { stage: "wifi" };
       fire({ type: "speed", speed: { ...r } });

@@ -61,15 +61,15 @@ func isElevated() bool { return windows.GetCurrentProcessToken().IsElevated() }
 
 // relaunchElevated starts this program again with administrator rights; Windows
 // shows its consent prompt. The new instance gets -elevated so that it keeps
-// its window open at the end.
+// its window open at the end. The flag goes before the command's own arguments:
+// after a word ("autojoin on") it would be taken for a second word, not a flag.
 func relaunchElevated(command string, args []string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
 	cwd, _ := os.Getwd()
-	all := append([]string{command}, args...)
-	all = append(all, "-elevated")
+	all := append([]string{command, "-elevated"}, args...)
 	quoted := make([]string, len(all))
 	for i, a := range all {
 		quoted[i] = syscall.EscapeArg(a)

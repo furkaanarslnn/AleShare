@@ -90,3 +90,29 @@ func TestSpeedLimitByName(t *testing.T) {
 		t.Fatal("limited a device that does not exist")
 	}
 }
+
+// A device that is removed takes its pause and its speed limit with it: the next device gets the same tunnel
+// address (the lowest free one) and must start clean.
+func TestRemovedDeviceLeavesNothingOnItsAddress(t *testing.T) {
+	c, _ := NewCore("")
+	c.AddPeer("Tab", "192.168.49.1:51820")
+	addr := c.state.Peers[0].IPv4
+	c.SetPaused("Tab", true)
+	c.SetSpeedLimit("Tab", 2000)
+	if !c.RemovePeer("Tab") {
+		t.Fatal("not removed")
+	}
+	c.AddPeer("Laptop", "192.168.49.1:51820")
+	if c.state.Peers[0].IPv4 != addr {
+		t.Fatal("the test expects the address to be handed out again")
+	}
+	if c.isPaused(addr) {
+		t.Fatal("the new device is paused")
+	}
+	c.pol.mu.RLock()
+	_, limited := c.pol.limits[addr]
+	c.pol.mu.RUnlock()
+	if limited {
+		t.Fatal("the new device has the old device's speed limit")
+	}
+}

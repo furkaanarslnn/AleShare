@@ -35,6 +35,19 @@ class GatewayService : Service() {
   private val handler = Handler(Looper.getMainLooper())
   private var reopenAttempts = 0
 
+  /**
+   * Counts the times sharing was started or ended in this service. Opening the Wi-Fi network takes seconds and
+   * answers later: an answer that belongs to a start the user has ended since (a quick stop, a double tap) must
+   * not bring sharing up behind their back, on a service Android is about to take away.
+   */
+  private var session = 0
+
+  /** The Wi-Fi network of this start is still being opened. */
+  private var opening = false
+
+  /** When sharing last wrote down that it still runs (see wasSharing). */
+  private var seenAt = 0L
+
   /** The network is being replaced: the group is closed on purpose, so the watcher must not reopen it. */
   private var switching = false
   private var changeDeadline = 0L
@@ -46,13 +59,13 @@ class GatewayService : Service() {
     when (intent?.action) {
       ACTION_STOP -> {
         shutDown()
-        stopSelf()
+        stopSelf(startId) // this stop only: a start that was asked for after it goes on
         return START_NOT_STICKY
       }
       ACTION_CHANGE_WIFI, ACTION_SWITCH_NOW, ACTION_CANCEL_CHANGE, ACTION_CHANGE_BAND -> {
         if (!GatewayState.state.value.running) {
           WifiNetwork.clearNext(this)
-          stopSelf()
+          if (!opening) stopSelf(startId)
           return START_NOT_STICKY
         }
         when (intent.action) {
@@ -77,7 +90,7 @@ class GatewayService : Service() {
             GatewayState.update { it.copy(error = "Bu cihaz başka bir telefona bağlıyken paylaşım yapamaz. Önce Bağlan sekmesinden bağlantıyı durdur.") }
             ShareControls.refresh(this)
           }
-          stopSelf()
+          stopSelf(startId)
           return START_NOT_STICKY
         }
       }
@@ -87,7 +100,7 @@ class GatewayService : Service() {
     val port = intent?.getIntExtra(EXTRA_PORT, DEFAULT_PORT) ?: DEFAULT_PORT
     val ownNetwork = if (intent?.hasExtra(EXTRA_OWN_NETWORK) == true) intent.getBooleanExtra(EXTRA_OWN_NETWORK, false) else ownNetworkPreference(this)
     if (!startGateway(port, ownNetwork)) {
-      stopSelf()
+      stopSelf(startId)
       return START_NOT_STICKY
     }
     return START_STICKY
@@ -107,8 +120,9 @@ class GatewayService : Service() {
       ShareControls.refresh(this)
       return false
     }
-    if (GatewayState.state.value.running) return true
+    if (GatewayState.state.value.running || opening) return true // a second tap while the first is still at work
 
+    val mine = ++session
     GatewayState.update { it.copy(starting = true, error = null) }
     ShareControls.refresh(this)
     // A change that was under way when sharing ended (or the app was killed) is dropped; devices that learned it
@@ -122,7 +136,14 @@ class GatewayService : Service() {
     credentials = wifi
     val g = WifiDirectGroup(this)
     group = g
+    opening = true
     g.create(wifi) { error ->
+      if (mine != session) {
+        // Sharing was ended while the network was opening: nothing starts, and a network that opened closes.
+        if (error == null) g.remove(wifi)
+        return@create
+      }
+      opening = false
       if (error != null) {
         fail(error)
       } else {
@@ -143,7 +164,12 @@ class GatewayService : Service() {
     val g = group
     if (wifi == null || g == null || switching) return
     switching = true
+    val mine = session
     g.replace(wifi, wifi) { error ->
+      if (mine != session) {
+        if (error == null) g.remove(wifi)
+        return@replace
+      }
       switching = false
       reopenAttempts = 0
       if (error != null) GatewayState.update { it.copy(error = "Wi-Fi ağı yeni bantta açılamadı. ($error)") }
@@ -160,7 +186,7 @@ class GatewayService : Service() {
       core.setSplitTLS(splitPreference(this)) // before the first connection, not after it
       // Guests whose time ran out while sharing was off do not get in again.
       val expired = Guests.over(this)
-      expired.forEach { core.removePeer(it); Guests.forget(this, it) }
+      expired.forEach { core.removePeer(it); Guests.forget(this, it); Controls.forget(this, it) }
       CoreHolder.save(this, core)
       // The store's token stays from the last run (a computer's window keeps reading the phone), unless a device left.
       if (expired.isEmpty()) core.setUpdateToken(Updates.token(this)) else Updates.renewToken(this, core)
@@ -274,12 +300,20 @@ class GatewayService : Service() {
   private fun checkGroup(wifi: WifiCredentials) {
     val g = group ?: return
     if (!GatewayState.state.value.running || switching || wifi != credentials) return
+    val mine = session
     g.isOpen(wifi) { open ->
+      if (mine != session) return@isOpen
       if (open) {
         reopenAttempts = 0
       } else if (reopenAttempts < MAX_REOPEN) {
         reopenAttempts++
-        g.create(wifi) { error -> if (error != null) GatewayState.update { it.copy(error = error) } }
+        g.create(wifi) { error ->
+          if (mine != session) {
+            if (error == null) g.remove(wifi)
+          } else if (error != null) {
+            GatewayState.update { it.copy(error = error) }
+          }
+        }
       }
     }
   }
@@ -339,7 +373,12 @@ class GatewayService : Service() {
     credentials = next
     core?.setWifi(next.ssid, next.passphrase, "", "")
     GatewayState.update { it.copy(wifiChange = null, network = next.ssid) }
+    val mine = session
     g.replace(old, next) { error ->
+      if (mine != session) {
+        if (error == null) g.remove(next)
+        return@replace
+      }
       switching = false
       if (error == null) {
         reopenAttempts = 0
@@ -350,7 +389,13 @@ class GatewayService : Service() {
       credentials = old
       core?.setWifi(old.ssid, old.passphrase, "", "")
       GatewayState.update { it.copy(network = old.ssid, error = "Yeni ağ açılamadı; eski ağa dönülüyor. ($error)") }
-      g.create(old) { again -> if (again != null) fail(again) }
+      g.create(old) { again ->
+        if (mine != session) {
+          if (again == null) g.remove(old)
+        } else if (again != null) {
+          fail(again)
+        }
+      }
     }
   }
 
@@ -362,6 +407,8 @@ class GatewayService : Service() {
   }
 
   private fun shutDown() {
+    session++ // answers that are still on their way belong to what ends here
+    opening = false
     handler.removeCallbacksAndMessages(null)
     shownNote = null
     sharedSince = 0L
@@ -430,6 +477,11 @@ class GatewayService : Service() {
   private fun refreshNotification() {
     val core = CoreHolder.peek()
     if (!GatewayState.state.value.running || core == null) return
+    val wall = System.currentTimeMillis()
+    if (wall - seenAt >= SEEN_EVERY_MILLIS || wall < seenAt) {
+      seenAt = wall
+      markSharingSeen(this, wall)
+    }
     // Changes a paired computer asked for.
     core.takeControls().lines().filter { it.isNotBlank() }.forEach { Controls.applyControl(this, core, it) }
     val active = core.activePeers(ACTIVE_SECONDS).lines().count { it.isNotBlank() }
@@ -506,6 +558,7 @@ class GatewayService : Service() {
     for (name in over) {
       core.removePeer(name)
       Guests.forget(this, name)
+      Controls.forget(this, name)
     }
     CoreHolder.save(this, core)
     Updates.renewToken(this, core) // the guest knew the store's token
@@ -714,6 +767,7 @@ class GatewayService : Service() {
     private const val CHANGE_WAIT_MILLIS = 90_000L
     private const val SETTLE_MILLIS = 3_000L
     private const val NOTIFY_EVERY_MILLIS = 3_000L
+    private const val SEEN_EVERY_MILLIS = 60_000L
     /**
      * A device counts as using the tunnel while something came from it this recently: a phone or tablet sends a
      * keepalive every 25 seconds, a computer checks the phone once a minute.
@@ -732,18 +786,29 @@ class GatewayService : Service() {
       context.startService(Intent(context, GatewayService::class.java).setAction(ACTION_STOP))
     }
 
-    /** Whether sharing was on when the app's process ended: so it was when an update replaced the app. */
-    fun wasSharing(context: Context): Boolean = prefs(context).getBoolean(KEY_SHARING_ON, false)
+    /**
+     * Whether sharing was on when the app's process ended a moment ago: so it was when an update replaced the app.
+     * The mark alone is not enough. A process that ended some other way (the app was force-stopped, or it crashed)
+     * leaves it behind too, and an update days later must not start sharing by itself. So sharing also writes
+     * down, once a minute, that it still runs, and only a mark that fresh counts (see [sharingFresh]).
+     */
+    fun wasSharing(context: Context): Boolean {
+      val p = prefs(context)
+      return p.getBoolean(KEY_SHARING_ON, false) && sharingFresh(p.getLong(KEY_SHARING_SEEN, 0), System.currentTimeMillis())
+    }
 
     fun forgetSharing(context: Context) = setSharingOn(context, false)
 
     private fun setSharingOn(context: Context, on: Boolean) {
-      prefs(context).edit().putBoolean(KEY_SHARING_ON, on).apply()
+      prefs(context).edit().putBoolean(KEY_SHARING_ON, on).putLong(KEY_SHARING_SEEN, if (on) System.currentTimeMillis() else 0L).apply()
     }
+
+    private fun markSharingSeen(context: Context, at: Long) = prefs(context).edit().putLong(KEY_SHARING_SEEN, at).apply()
 
     private fun prefs(context: Context) = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
     private const val KEY_SHARING_ON = "sharing_on"
+    private const val KEY_SHARING_SEEN = "sharing_seen"
 
     /** Starts replacing the network with [next]; the secret stays in encrypted storage, not in the intent. */
     fun changeWifi(context: Context, next: WifiCredentials) {
@@ -769,6 +834,15 @@ class GatewayService : Service() {
     }
   }
 }
+
+/**
+ * Whether a mark "sharing is on" still says something at [now], given when sharing last wrote down that it runs
+ * ([seen], epoch milliseconds): only for some minutes after that. An update ends the process and starts the new
+ * release within that time. A mark from a release before 1.2.2 has no such time (0) and counts.
+ */
+internal fun sharingFresh(seen: Long, now: Long): Boolean = seen == 0L || now - seen in 0..SHARING_FRESH_MILLIS
+
+private const val SHARING_FRESH_MILLIS = 10 * 60_000L
 
 internal fun wifiGoingOff(state: Int): Boolean =
   state == WifiManager.WIFI_STATE_DISABLING || state == WifiManager.WIFI_STATE_DISABLED

@@ -59,12 +59,22 @@ func blockedAnswer(query []byte) []byte {
 
 // ---- paused clients (Options.Paused) ----
 
-func (g *Gateway) paused(client netip.Addr) bool { return g.opts.Paused != nil && g.opts.Paused(client) }
+func (g *Gateway) paused(client netip.Addr) bool {
+	return g.opts.Paused != nil && g.opts.Paused(client)
+}
 
 // flowSet knows the flows under way per client, to end them when the client is paused.
 type flowSet struct {
 	mu sync.Mutex
 	m  map[netip.Addr]map[*func()]struct{}
+	n  int // flows of all clients
+}
+
+// full reports whether client, or all the clients together, hold as many flows as they may.
+func (f *flowSet) full(client netip.Addr) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.m[client]) >= maxClientFlows || f.n >= maxFlows
 }
 
 // add registers a flow of client, ended by stop; the returned function unregisters it.
@@ -79,9 +89,13 @@ func (f *flowSet) add(client netip.Addr, stop func()) (remove func()) {
 	}
 	key := &stop
 	f.m[client][key] = struct{}{}
+	f.n++
 	return func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		if _, there := f.m[client][key]; there {
+			f.n--
+		}
 		delete(f.m[client], key)
 		if len(f.m[client]) == 0 {
 			delete(f.m, client)
@@ -105,6 +119,16 @@ func (f *flowSet) cut(client netip.Addr) int {
 
 // CutClient ends the flows under way of a client (a device whose internet was just paused) and returns how many.
 func (g *Gateway) CutClient(client netip.Addr) int { return g.flows.cut(client.Unmap()) }
+
+// ForgetClient ends the flows of a client whose device is gone and drops what was counted for its address: the
+// next device to get the address starts from nothing.
+func (g *Gateway) ForgetClient(client netip.Addr) {
+	client = client.Unmap()
+	g.flows.cut(client)
+	g.usage.mu.Lock()
+	delete(g.usage.m, client)
+	g.usage.mu.Unlock()
+}
 
 // ---- what each client moved over the internet ----
 
@@ -146,13 +170,21 @@ func (g *Gateway) ClientBytes() map[netip.Addr]int64 {
 // ---- smart priority (Options.Priority) ----
 
 const (
-	bulkAfter       = 2 << 20               // a flow that moved this much in one direction is a big transfer
-	realtimeLinger  = 3 * time.Second       // real-time traffic counts as present this long after it was seen
-	realtimePackets = 15                    // datagrams per second, at least …
-	realtimeSize    = 600                   // … of at most this many bytes on average
-	holdShare       = 0.6                   // big transfers get this share of what the link carried before
-	minHold         = 128 << 10             // bytes per second big transfers always get
+	bulkAfter       = 2 << 20         // a flow that moved this much in one direction is a big transfer
+	realtimeLinger  = 3 * time.Second // real-time traffic counts as present this long after it was seen
+	realtimePackets = 15              // datagrams per second, at least …
+	realtimeSize    = 600             // … of at most this many bytes on average
+	holdShare       = 0.6             // big transfers get this share of what the link carried before
+	minHold         = 128 << 10       // bytes per second big transfers always get
 	measureEvery    = time.Second
+	// What the link can do shows only while something uses it fully; a quiet minute (some pages, a chat) says
+	// nothing about it. So the recent best fades slowly, a hundredth a second, and never below a quarter of the
+	// most the link carried since sharing began, which itself fades over tens of minutes (the phone may have moved
+	// to a worse network). Fading fast, as it once did, left a download that began during a call after a quiet
+	// while at the minimum for the whole call.
+	peakFade  = 0.99
+	bestFade  = 0.9995
+	bestShare = 0.25
 )
 
 // priority keeps calls and games smooth on a busy link. The phone's mobile link has deep queues: a big download
@@ -168,6 +200,7 @@ type priority struct {
 	tick  time.Time  // the start of the second being measured
 	moved [2]int64   // bytes moved in it, per direction
 	peak  [2]float64 // bytes per second the link carried lately, per direction
+	best  [2]float64 // the most it carried in a second since sharing began (fading slowly)
 	limit [2]bucket
 }
 
@@ -204,8 +237,9 @@ func (p *priority) carried(dir, n int, now time.Time) {
 			rate := float64(p.moved[d]) / elapsed.Seconds()
 			p.moved[d] = 0
 			if !busy {
-				// What the link can do, as the recent best; it fades slowly when the link gets worse.
-				p.peak[d] = max(rate, p.peak[d]*0.9)
+				// What the link can do, as the recent best (see peakFade).
+				p.best[d] = max(rate, p.best[d]*bestFade)
+				p.peak[d] = max(rate, p.peak[d]*peakFade, p.best[d]*bestShare)
 			}
 			p.limit[d].setRate(max(p.peak[d]*holdShare, minHold), now)
 		}
@@ -281,7 +315,9 @@ type Limiter struct {
 }
 
 // SetRate sets the limit in bytes per second, each way; 0 lifts it.
-func (l *Limiter) SetRate(bytesPerSecond float64) { l.rate.Store(math.Float64bits(max(bytesPerSecond, 0))) }
+func (l *Limiter) SetRate(bytesPerSecond float64) {
+	l.rate.Store(math.Float64bits(max(bytesPerSecond, 0)))
+}
 
 // Rate is the limit in bytes per second; 0 when there is none.
 func (l *Limiter) Rate() float64 { return math.Float64frombits(l.rate.Load()) }
@@ -325,4 +361,3 @@ func (w *rtWindow) add(n int, now time.Time, see func(packets, bytes int)) {
 	w.packets++
 	w.bytes += n
 }
-

@@ -1,6 +1,8 @@
 package wgcore
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"hotspot/core/internal/release"
@@ -23,8 +26,11 @@ import (
 // of, hands each to paired devices that run an older one, and takes a newer one from a paired device that brings
 // it: whichever device was updated first, the others follow.
 //
-// Only paired devices take part: they learn the phone's token in the sealed answer about the Wi-Fi network, and
-// every request needs it. A Windows program is taken only with this project's release signature (see
+// Only paired devices take part: they learn a token in the sealed answer about the Wi-Fi network, and every
+// request needs it. There are two: the computers' (they paired with the phone on its screen, with their own key)
+// lets one change the phone's switches; the one for the devices that were added with a code or a link (phones,
+// tablets, guests) does everything else, and of the changes only starts a speed test. A guest who reads the token
+// out of the app cannot lift their own limit with it. A Windows program is taken only with this project's release signature (see
 // internal/release), which is also what the computers check before they install one. An APK is checked by the app
 // (its signing certificate must be this app's) before the phone offers it, and Android checks it again on install.
 //
@@ -33,7 +39,8 @@ import (
 //	GET  /hotspot-pc.exe?t=TOKEN            the Windows program
 //	POST /hotspot-pc.exe?t=TOKEN            a newer Windows program from a computer
 //	GET  /phone?t=TOKEN                     the phone's state as the app tells it (SetPhoneStatus), JSON
-//	POST /phone?t=TOKEN                     a change a computer asks for, a JSON object (TakeControls)
+//	POST /phone?t=TOKEN                     a change a computer asks for, a JSON object (TakeControls); with the
+//	                                        devices' token only {"speedtest":true}
 
 // UpdatePort is where the phone hands out and takes releases: on its Wi-Fi network, and on its own address inside
 // the tunnel (a computer whose tunnel is up can reach nothing else).
@@ -62,15 +69,27 @@ type updates struct {
 	store    string       // where brought files go; empty: nothing is taken
 	received *releaseFile // an APK a device brought, until the app has looked at it
 	verify   func([]byte) (release.Info, error)
-	changed  func() // what is on offer changed
-	status   string   // the phone's state for the computers, JSON (SetPhoneStatus)
-	controls []string // changes the computers asked for, JSON objects, until the app takes them
+	changed  func()      // what is on offer changed
+	status   string      // the phone's state for the computers, JSON (SetPhoneStatus)
+	controls []string    // changes the computers asked for, JSON objects, until the app takes them
+	bringing atomic.Bool // a device is bringing a file: one at a time (each holds megabytes of memory or disk)
 }
+
+// uploadTime is how long a device has to bring a file.
+const uploadTime = 5 * time.Minute
 
 const (
 	maxControl  = 4 << 10
 	maxControls = 32
 )
+
+// deviceToken makes, from the computers' token, the one the other devices are told. Nobody gets from it back to the
+// computers' token.
+func deviceToken(token string) string {
+	h := hmac.New(sha256.New, []byte(token))
+	h.Write([]byte("aleshare device token"))
+	return hex.EncodeToString(h.Sum(nil)[:16])
+}
 
 func newUpdates() *updates {
 	return &updates{token: randomToken(), verify: release.Verify, changed: func() {}}
@@ -120,12 +139,15 @@ func (u *updates) takeReceived() *releaseFile {
 	return r
 }
 
-// handler serves the store to senders that accept likes and that know the token; anything else is not found.
+// handler serves the store to senders that accept likes and that know a token; anything else is not found.
 func (u *updates) handler(accept func(netip.Addr) bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		app, pc, token := u.offers()
 		ip, err := netip.ParseAddrPort(r.RemoteAddr)
-		if err != nil || !accept(ip.Addr().Unmap()) || subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("t")), []byte(token)) != 1 {
+		given := []byte(r.URL.Query().Get("t"))
+		computer := subtle.ConstantTimeCompare(given, []byte(token)) == 1
+		device := subtle.ConstantTimeCompare(given, []byte(deviceToken(token))) == 1
+		if err != nil || !accept(ip.Addr().Unmap()) || !(computer || device) {
 			http.NotFound(w, r)
 			return
 		}
@@ -136,10 +158,18 @@ func (u *updates) handler(accept func(netip.Addr) bool) http.Handler {
 		case r.URL.Path == "/hotspot-pc.exe" && r.Method == http.MethodGet && pc.path != "":
 			w.Header().Set("Content-Type", "application/octet-stream")
 			http.ServeFile(w, r, pc.path)
-		case r.URL.Path == "/hotspot.apk" && r.Method == http.MethodPost:
-			u.receiveAPK(w, r)
-		case r.URL.Path == "/hotspot-pc.exe" && r.Method == http.MethodPost:
-			u.receiveProgram(w, r)
+		case (r.URL.Path == "/hotspot.apk" || r.URL.Path == "/hotspot-pc.exe") && r.Method == http.MethodPost:
+			if !u.bringing.CompareAndSwap(false, true) {
+				http.Error(w, "busy", http.StatusTooManyRequests)
+				return
+			}
+			defer u.bringing.Store(false)
+			http.NewResponseController(w).SetReadDeadline(time.Now().Add(uploadTime))
+			if r.URL.Path == "/hotspot.apk" {
+				u.receiveAPK(w, r)
+			} else {
+				u.receiveProgram(w, r)
+			}
 		case r.URL.Path == "/phone" && r.Method == http.MethodGet:
 			u.mu.Lock()
 			status := u.status
@@ -151,7 +181,7 @@ func (u *updates) handler(accept func(netip.Addr) bool) http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, status)
 		case r.URL.Path == "/phone" && r.Method == http.MethodPost:
-			u.receiveControl(w, r)
+			u.receiveControl(w, r, computer)
 		case r.URL.Path == "/speed" && (r.Method == http.MethodGet || r.Method == http.MethodPost):
 			serveSpeed(w, r)
 		default:
@@ -184,6 +214,9 @@ func (u *updates) receiveAPK(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.mu.Lock()
+	if old := u.received; old != nil && old.path != path {
+		os.Remove(old.path) // the one brought before it, which the app has not taken: only the newest is kept
+	}
 	u.received = &releaseFile{path, code, release.Name(code)}
 	u.mu.Unlock()
 	w.WriteHeader(http.StatusOK)
@@ -228,8 +261,8 @@ func (u *updates) receiveProgram(w http.ResponseWriter, r *http.Request) {
 }
 
 // receiveControl queues a change a computer asks for: one JSON object of plain values. The app decides what it means
-// (and ignores what it does not know).
-func (u *updates) receiveControl(w http.ResponseWriter, r *http.Request) {
+// (and ignores what it does not know). A sender that is no computer may only have the phone measure its speed.
+func (u *updates) receiveControl(w http.ResponseWriter, r *http.Request, computer bool) {
 	data, err := io.ReadAll(io.LimitReader(r.Body, maxControl+1))
 	var obj map[string]any
 	if err != nil || len(data) > maxControl || json.Unmarshal(data, &obj) != nil || len(obj) == 0 {
@@ -243,6 +276,10 @@ func (u *updates) receiveControl(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
+	}
+	if !computer && !(len(obj) == 1 && obj["speedtest"] == true) {
+		http.Error(w, "not for this device", http.StatusForbidden)
+		return
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -317,7 +354,9 @@ func (l *tunnelListener) Close() error {
 	return nil
 }
 
-func (l *tunnelListener) Addr() net.Addr { return &net.TCPAddr{IP: net.IPv4(10, 8, 0, 1), Port: UpdatePort} }
+func (l *tunnelListener) Addr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(10, 8, 0, 1), Port: UpdatePort}
+}
 
 // ---- the core's side ----
 
@@ -412,7 +451,7 @@ func acceptUpdate(a netip.Addr) bool {
 
 // startUpdates serves the store on the Wi-Fi network and inside the tunnel. Callers hold c.mu.
 func (c *Core) startUpdates() map[uint16]func(net.Conn) {
-	srv := &http.Server{Handler: c.upd.handler(acceptUpdate), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: c.upd.handler(acceptUpdate), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
 	c.updateTunnel = newTunnelListener()
 	go srv.Serve(c.updateTunnel)
 	if ln, err := net.Listen("tcp4", fmt.Sprintf(":%d", UpdatePort)); err == nil {

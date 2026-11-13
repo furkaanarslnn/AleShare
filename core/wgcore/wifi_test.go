@@ -77,8 +77,9 @@ func TestAskWifi(t *testing.T) {
 	c.publishLocked()
 	c.mu.Unlock()
 	_, _, token := c.upd.offers()
+	// "Tab" was added with a code, so it is told the devices' token, not the computers'.
 	if w, err = AskWifi(config, nil); err != nil || w.AppCode != 9 || w.AppName != "1.0.9" ||
-		w.UpdateURL != "http://127.0.0.1:51823/hotspot.apk?t="+token || w.SSID != "DIRECT-HS-Q4TZ" {
+		w.UpdateURL != "http://127.0.0.1:51823/hotspot.apk?t="+deviceToken(token) || w.SSID != "DIRECT-HS-Q4TZ" {
 		t.Fatalf("got %+v, %v", w, err)
 	}
 	// What is on offer is told at once when it changes.

@@ -17,7 +17,7 @@ const (
 	stepWireGuard stepID = "wireguard" // the tunnel program
 	stepWifi      stepID = "wifi"      // the phone's own network
 	stepPair      stepID = "pair"      // the QR code (or the number)
-	stepInstall   stepID = "install"   // files, tunnel service, scheduled task
+	stepInstall   stepID = "install"   // files, tunnel service, watcher service
 )
 
 // setupUI is where the setup says what it is doing and asks what only the user knows: the window, or the console

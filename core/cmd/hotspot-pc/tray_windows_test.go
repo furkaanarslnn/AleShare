@@ -103,3 +103,19 @@ func TestTrayTip(t *testing.T) {
 		t.Fatalf("%d characters: too long for a tooltip", n)
 	}
 }
+
+// Signing in away from the phone is no lost connection: nothing was connected yet.
+func TestTraySaysNothingBeforeTheFirstConnection(t *testing.T) {
+	var a trayAlerts
+	now := time.Date(2026, 11, 2, 8, 0, 0, 0, time.Local)
+	for i := 0; i < 40; i++ {
+		if got := a.check(false, nil, "PC", now.Add(time.Duration(i)*3*time.Second)); len(got) != 0 {
+			t.Fatalf("after %d s without ever being connected: %s", i*3, titles(got))
+		}
+	}
+	a.check(true, nil, "PC", now.Add(3*time.Minute))
+	a.check(false, nil, "PC", now.Add(4*time.Minute))
+	if got := a.check(false, nil, "PC", now.Add(5*time.Minute)); titles(got) != "Telefonla bağlantı yok" {
+		t.Fatalf("lost after it was up: %q", titles(got))
+	}
+}

@@ -37,3 +37,20 @@ func TestWlanStatesIsCheapAndSteady(t *testing.T) {
 		t.Fatalf("two looks took %v", d)
 	}
 }
+
+// While a setup holds its mark, a look at it finds it; afterwards it is gone.
+func TestSetupMark(t *testing.T) {
+	setupMutex = `Local\HotspotSetupTest`
+	if setupRunning() {
+		t.Fatal("a setup is said to run before any began")
+	}
+	resume := holdSetup()
+	if !setupRunning() {
+		t.Fatal("the setup's mark is not seen")
+	}
+	resume()
+	resume() // a second call does nothing
+	if setupRunning() {
+		t.Fatal("the mark outlived the setup")
+	}
+}

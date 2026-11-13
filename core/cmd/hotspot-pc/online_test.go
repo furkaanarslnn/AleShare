@@ -29,12 +29,12 @@ func TestParseManifest(t *testing.T) {
 		t.Fatalf("got %+v", r)
 	}
 	bad := map[string]string{
-		"a file on another site":        strings.Replace(goodManifest, "https://github.com/furkaanarslnn/AleShare/releases/download/v1.1.1/AleShare.exe", "https://example.com/AleShare.exe", 1),
-		"a file in another repository":  strings.Replace(goodManifest, "furkaanarslnn/AleShare/releases/download/v1.1.1/AleShare", "someone/AleShare/releases/download/v1.1.1/AleShare", 1),
-		"no name":                       strings.Replace(goodManifest, `"name":"1.1.1"`, `"name":""`, 1),
-		"no size":                       strings.Replace(goodManifest, `"size":8500000`, `"size":0`, 1),
-		"a short checksum":              strings.Replace(goodManifest, sum64+`"}}`, `abcd"}}`, 1),
-		"not JSON":                      "<html>Not Found</html>",
+		"a file on another site":       strings.Replace(goodManifest, "https://github.com/furkaanarslnn/AleShare/releases/download/v1.1.1/AleShare.exe", "https://example.com/AleShare.exe", 1),
+		"a file in another repository": strings.Replace(goodManifest, "furkaanarslnn/AleShare/releases/download/v1.1.1/AleShare", "someone/AleShare/releases/download/v1.1.1/AleShare", 1),
+		"no name":                      strings.Replace(goodManifest, `"name":"1.1.1"`, `"name":""`, 1),
+		"no size":                      strings.Replace(goodManifest, `"size":8500000`, `"size":0`, 1),
+		"a short checksum":             strings.Replace(goodManifest, sum64+`"}}`, `abcd"}}`, 1),
+		"not JSON":                     "<html>Not Found</html>",
 	}
 	for what, text := range bad {
 		if _, err := parseManifest([]byte(text)); err == nil {

@@ -61,6 +61,19 @@ type App struct {
 	Code  int    `json:"code"`
 	Name  string `json:"name"`
 	Token string `json:"token"`
+	// DeviceToken is what the devices named with SetDevices are told as their token in place of Token: the phone
+	// gives them fewer rights (see wgcore, update.go). It never travels under this name.
+	DeviceToken string `json:"-"`
+}
+
+// forDevice is a as a device named with SetDevices is told it.
+func (a *App) forDevice() *App {
+	if a == nil {
+		return nil
+	}
+	c := *a
+	c.Token = c.DeviceToken // empty when the phone made none: then the device gets no token, never the other one
+	return &c
 }
 
 const (
@@ -72,7 +85,8 @@ const (
 
 	// A device asks again this soon when no answer came; UDP may lose a packet.
 	retryAfter = 700 * time.Millisecond
-	// The phone answers this many requests in a burst and this many a second after that, whoever asks.
+	// The phone answers each paired device this many requests in a burst and this many a second after that. What
+	// comes from nobody paired gets no answer and uses none of it up.
 	burst   = 20
 	perSec  = 10
 	maxRead = 2048
@@ -132,13 +146,30 @@ type Responder struct {
 	info    *Info                // nil: nothing to tell
 	learned map[wgkey.Key]bool   // devices that were told the current Next
 	asked   map[wgkey.Key]bool   // devices that asked at all: those follow a change by themselves
-	tokens  float64
-	filled  time.Time
+	devices map[wgkey.Key]bool   // devices that are told DeviceToken (SetDevices)
+	rates   map[wgkey.Key]*rate  // how much each device may still ask
+}
+
+// rate is one device's allowance of requests.
+type rate struct {
+	left   float64
+	filled time.Time
 }
 
 // NewResponder makes the phone's side. private is the WireGuard server key.
 func NewResponder(private wgkey.Key) *Responder {
-	return &Responder{private: private, peers: map[wgkey.Key][]byte{}, learned: map[wgkey.Key]bool{}, asked: map[wgkey.Key]bool{}, tokens: burst}
+	return &Responder{private: private, peers: map[wgkey.Key][]byte{}, learned: map[wgkey.Key]bool{}, asked: map[wgkey.Key]bool{}, rates: map[wgkey.Key]*rate{}}
+}
+
+// SetDevices names the devices that are told an App's DeviceToken in place of its Token.
+func (r *Responder) SetDevices(public []wgkey.Key) {
+	devices := make(map[wgkey.Key]bool, len(public))
+	for _, pub := range public {
+		devices[pub] = true
+	}
+	r.mu.Lock()
+	r.devices = devices
+	r.mu.Unlock()
 }
 
 // Asked lists the devices that have asked since the responder was made. A device that never asks (one with the
@@ -168,6 +199,11 @@ func (r *Responder) SetPeers(public []wgkey.Key) {
 		}
 	}
 	r.peers = peers
+	for pub := range r.rates {
+		if _, still := peers[pub]; !still {
+			delete(r.rates, pub)
+		}
+	}
 }
 
 // SetInfo sets what the devices are told; nil tells nothing. A different Next starts the count of Learned anew.
@@ -221,19 +257,20 @@ func (r *Responder) Learned() []wgkey.Key {
 	return out
 }
 
-// allow takes one token of the rate limit.
-func (r *Responder) allow(now time.Time) bool {
-	if !r.filled.IsZero() {
-		r.tokens += now.Sub(r.filled).Seconds() * perSec
-		if r.tokens > burst {
-			r.tokens = burst
-		}
+// allow takes one request from the allowance of the paired device pub. Callers hold r.mu.
+func (r *Responder) allow(pub wgkey.Key, now time.Time) bool {
+	b := r.rates[pub]
+	if b == nil {
+		b = &rate{left: burst}
+		r.rates[pub] = b
+	} else {
+		b.left = min(b.left+now.Sub(b.filled).Seconds()*perSec, burst)
 	}
-	r.filled = now
-	if r.tokens < 1 {
+	b.filled = now
+	if b.left < 1 {
 		return false
 	}
-	r.tokens--
+	b.left--
 	return true
 }
 
@@ -248,14 +285,23 @@ func (r *Responder) Answer(request []byte) []byte {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.info == nil || !r.allow(time.Now()) {
+	if r.info == nil {
 		return nil
 	}
 	for pub, k := range r.peers {
 		if !hmac.Equal(requestTag(k, challenge), tag) {
 			continue
 		}
-		plain, err := json.Marshal(r.info)
+		// Counted only now that the sender proved to be this device: anybody in reach of the phone's Wi-Fi could
+		// otherwise use the allowance up with junk, and the paired devices would get no answer.
+		if !r.allow(pub, time.Now()) {
+			return nil
+		}
+		info := *r.info
+		if r.devices[pub] {
+			info.App, info.PC = info.App.forDevice(), info.PC.forDevice()
+		}
+		plain, err := json.Marshal(&info)
 		if err != nil {
 			return nil
 		}

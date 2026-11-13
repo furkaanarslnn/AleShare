@@ -15,14 +15,14 @@ const (
 	logLimit   = 100 << 10
 )
 
-// settings are written at setup and read by the task.
+// settings are written at setup and read by the watcher service.
 type settings struct {
 	Phone   string `json:"phone"`   // the phone's address on its own network
 	Profile string `json:"profile"` // the network's name on this computer
 	// Next is the name the phone announced for its network while the user changes it; the computer is at home
 	// on it as on Profile, and it becomes Profile once the phone has moved.
 	Next string `json:"next,omitempty"`
-	// AutoJoin lets the scheduled task connect to the phone's network by itself when it is in range.
+	// AutoJoin lets the watcher service connect to the phone's network by itself when it is in range.
 	// Off unless the user asked for it: it moves this computer off whatever network it is on.
 	AutoJoin bool `json:"auto_join"`
 	// Version is the release of the installed program (empty for installations older than 1.0.11).

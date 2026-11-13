@@ -193,3 +193,27 @@ func TestLimitWaitsForTheSlowerLimiter(t *testing.T) {
 		t.Fatalf("2 MiB at 1 MiB/s for the device: waited %v, want about 2 s", w)
 	}
 }
+
+// A quiet while before a call must not leave big transfers at the minimum: what the link showed it can do is
+// remembered.
+func TestPriorityRemembersTheLinkThroughAQuietWhile(t *testing.T) {
+	now := time.Date(2026, 11, 1, 21, 0, 0, 0, time.UTC)
+	p := &priority{on: func() bool { return true }}
+	for i := 0; i <= 3; i++ { // a download showed 10 MB/s
+		p.carried(down, 10<<20, now)
+		now = now.Add(time.Second)
+	}
+	for i := 0; i < 10*60; i++ { // ten minutes of next to nothing
+		p.carried(down, 2000, now)
+		now = now.Add(time.Second)
+	}
+	p.sawRealtime(50, 50*160, 3478, now)
+	now = now.Add(time.Second)
+	p.carried(down, 1, now)
+	p.limit[down].mu.Lock()
+	got := p.limit[down].rate
+	p.limit[down].mu.Unlock()
+	if got < (10<<20)*bestShare*holdShare*0.7 || got > (10<<20)*holdShare {
+		t.Fatalf("big transfers get %.0f bytes a second during the call", got)
+	}
+}

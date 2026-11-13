@@ -32,7 +32,7 @@ AleShare, Android telefonunuzu kablosuz bir internet paylaşım noktasına dön�
 
 | Cihaz | Dosya | Gereksinim |
 | --- | --- | --- |
-| Android telefon ve tablet | [AleShare.apk](https://github.com/furkaanarslnn/AleShare/releases/latest/download/AleShare.apk) | Android 8.0 ya da üstü, 64 bit |
+| Android telefon ve tablet | [AleShare.apk](https://github.com/furkaanarslnn/AleShare/releases/latest/download/AleShare.apk) | Android 10 ya da üstü, 64 bit |
 | Windows bilgisayar | [AleShare.exe](https://github.com/furkaanarslnn/AleShare/releases/latest/download/AleShare.exe) | Windows 10 ya da 11, 64 bit |
 | iPhone, Mac ve Linux | | Geliştirilme aşamasında |
 
@@ -115,7 +115,7 @@ Windows programı bağlantının durumunu ve telefonun bilgilerini gösterir; te
 
 - Hesap, reklam ve analiz yoktur; projeye ait bir sunucu bulunmaz.
 - Hangi cihazın hangi adrese gittiği kaydedilmez.
-- Sürüm denetimi GitHub'a yapılan küçük bir istektir ve ayarlardan kapatılabilir.
+- Sürüm denetimi GitHub'a yapılan küçük bir istektir; Android uygulamasında ayarlardan kapatılabilir.
 
 ## Kaynak kod
 
@@ -127,7 +127,7 @@ Depo yalnızca kaynak kodu içerir; uygulamalar [Sürümler sayfasındadır](htt
 | `core/` | Go çekirdeği: WireGuard sunucusu, ağ geçidi, eşleşme, güncelleme |
 | `core/cmd/hotspot-pc/` | Windows programı |
 
-Derlemek için Windows'ta `.\build-android.ps1` çalıştırılır (Go, JDK 17 ve NDK'sı kurulu Android SDK gerekir). Yayın imza anahtarları depoda yoktur; bu nedenle başka bir yerde derlenen uygulama, yayımlanmış uygulamanın üzerine kurulamaz.
+Derlemek için Windows'ta `.\build-android.ps1` çalıştırılır (Go, gomobile, Temurin JDK 17 ve NDK'sı kurulu Android SDK gerekir). Yayın imza anahtarları depoda yoktur; bu nedenle başka bir yerde derlenen uygulama, yayımlanmış uygulamanın üzerine kurulamaz.
 
 <details>
 <summary>Nasıl çalışır?</summary>
@@ -135,7 +135,7 @@ Derlemek için Windows'ta `.\build-android.ps1` çalıştırılır (Go, JDK 17 v
 - Paylaşan telefon, Wi-Fi Direct ile kendi kablosuz ağını açar.
 - Telefonda kullanıcı alanında çalışan bir WireGuard sunucusu bulunur; her cihaz kendi anahtarıyla bağlanır.
 - Tünelden gelen trafik, kullanıcı alanındaki bir ağ geçidiyle telefonun mobil verisine iletilir. Root yetkisi gerekmez.
-- DNS sorgularını telefon yanıtlar ve HTTPS üzerinden çözer.
+- DNS sorgularını telefon yanıtlar ve HTTPS üzerinden çözer; şifreli sunuculara ulaşılamadığında sorgu şifresiz gönderilir.
 - Windows programı, resmî WireGuard for Windows hizmetini kullanır; yoksa kurulum sırasında indirip kurar.
 
 </details>

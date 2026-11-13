@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -110,8 +111,11 @@ func TestJoinRejects(t *testing.T) {
 		"future format":  enc(`{"v":2,"s":"x","p":"12345678","c":""}`),
 		"no name":        enc(`{"v":1,"s":"","p":"12345678","c":"x"}`),
 		"short password": enc(`{"v":1,"s":"net","p":"1234","c":"x"}`),
-		"bad config":     enc(`{"v":1,"s":"net","p":"12345678","c":"[Interface]"}`),
-		"too long":       good + strings.Repeat("A", 9000),
+		// A password Android refuses outright: saved, it would end the app at every start.
+		"password with other letters": enc(`{"v":1,"s":"net","p":"şifreşifre","c":` + strconv.Quote(conf) + `}`),
+		"password with a line break":  enc(`{"v":1,"s":"net","p":"1234\n5678","c":` + strconv.Quote(conf) + `}`),
+		"bad config":                  enc(`{"v":1,"s":"net","p":"12345678","c":"[Interface]"}`),
+		"too long":                    good + strings.Repeat("A", 9000),
 	}
 	for name, text := range cases {
 		if _, err := vpnclient.ParseJoin(text); err == nil {
@@ -333,4 +337,19 @@ func startEcho(t *testing.T) string {
 		}
 	}()
 	return l.Addr().String()
+}
+
+// A password of plain characters with a space or a sign in it is as good as any.
+func TestJoinTakesAnyPrintablePassword(t *testing.T) {
+	_, conf := confFor(t, "192.168.49.1:51820")
+	link, err := vpnclient.EncodeJoin("DIRECT-Ev", `a b~!"#$%&'()`, conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j, err := vpnclient.ParseJoin(link); err != nil || j.Password != `a b~!"#$%&'()` {
+		t.Fatalf("%+v, %v", j, err)
+	}
+	if _, err := vpnclient.EncodeJoin("DIRECT-Ev", "şifreşifre", conf); err == nil {
+		t.Error("EncodeJoin made a link with a password Android refuses")
+	}
 }

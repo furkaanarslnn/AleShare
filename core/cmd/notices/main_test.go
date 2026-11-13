@@ -52,3 +52,20 @@ func TestSameTextSharesASection(t *testing.T) {
 		t.Fatalf("sections: %q, names: %v", n.order, n.names)
 	}
 }
+
+func TestNewerVersionComparesNumbers(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"18.10.0", "18.9.0", true}, {"18.9.0", "18.10.0", false}, {"17.0.0", "17.0.0", false},
+		{"2.3.3", "2.2.6", true}, {"1.0.0-beta2", "1.0.0-beta1", true}, {"16.1.0", "16.1", true},
+	} {
+		if got := newerVersion(c.a, c.b); got != c.want {
+			t.Errorf("newerVersion(%q, %q) = %v", c.a, c.b, got)
+		}
+	}
+	if got := cachedVersion(filepath.Join("files-2.1", "com.google.mlkit", "common", "18.9.0", "e6c2", "common-18.9.0.aar")); got != "18.9.0" {
+		t.Errorf("cachedVersion: %q", got)
+	}
+}

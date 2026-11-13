@@ -96,7 +96,11 @@ object DataUsage {
   fun limitMb(context: Context): Long = prefs(context).getLong(KEY_LIMIT_MB, 0)
 
   fun setLimitMb(context: Context, mb: Long) {
-    prefs(context).edit().putLong(KEY_LIMIT_MB, mb).apply()
+    val p = prefs(context)
+    if (p.getLong(KEY_LIMIT_MB, 0) == mb) return
+    // Another limit is judged afresh: what was said and done about the old one today does not count for it. (It
+    // did: after one stop, a limit raised that day never warned or stopped again.)
+    p.edit().putLong(KEY_LIMIT_MB, mb).remove(KEY_WARNED_DAY).remove(KEY_STOPPED_DAY).apply()
   }
 
   /**

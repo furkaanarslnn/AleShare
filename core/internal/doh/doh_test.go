@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"hotspot/core/internal/doh"
 )
@@ -128,5 +129,56 @@ func TestNothingAnswers(t *testing.T) {
 	}
 	if _, _, err := r.Resolve(context.Background(), []byte{1, 2, 3}); err == nil {
 		t.Fatal("a 3-byte message is not a DNS query")
+	}
+}
+
+// swallowing dials like a network that drops every packet to the DoH servers: a TCP connection never comes about,
+// the dial ends only with its context. UDP (the fallback) goes through.
+type swallowing struct{}
+
+func (swallowing) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	if strings.HasPrefix(network, "tcp") {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	var d net.Dialer
+	return d.DialContext(ctx, network, address)
+}
+
+// Servers that never answer must not use up the whole time of a lookup: the fallback still gets asked, and the
+// next lookups go to it at once instead of waiting for the servers again.
+func TestFallbackWhenTheServersTimeOut(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, from, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			buf[2] |= 0x80
+			pc.WriteTo(buf[:n], from)
+		}
+	}()
+	servers := []doh.Server{{URL: "https://a.example/dns-query", Addr: "192.0.2.1:443"}, {URL: "https://b.example/dns-query", Addr: "192.0.2.2:443"}, {URL: "https://c.example/dns-query", Addr: "192.0.2.3:443"}}
+	r := doh.New(swallowing{}, servers, netip.MustParseAddrPort(pc.LocalAddr().String()), nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	began := time.Now()
+	ans, encrypted, err := r.Resolve(ctx, query)
+	if err != nil {
+		t.Fatalf("no answer although the fallback works: %v", err)
+	}
+	if encrypted || ans[0] != 0xbe || time.Since(began) > 4*time.Second {
+		t.Fatalf("encrypted=%v after %v", encrypted, time.Since(began))
+	}
+	began = time.Now()
+	if _, _, err := r.Resolve(context.Background(), query); err != nil || time.Since(began) > time.Second {
+		t.Fatalf("the next lookup waited for the servers again: %v, %v", time.Since(began), err)
 	}
 }

@@ -191,6 +191,25 @@ private class Pairing(
   val guestNote: String? = null,
 )
 
+/**
+ * The pairing code on the screen. It lives outside the screen's own state: turning the phone builds the screen
+ * anew, and a code that is shown only once must not be lost to that (the device is in the list by then, and
+ * without its code it would have to be removed and added again). It goes when the user closes it.
+ */
+private val shownPairing = mutableStateOf<Pairing?>(null)
+
+/** The address Android gives the owner of a Wi-Fi Direct group, on every phone. */
+private const val OWN_NETWORK_ADDRESS = "192.168.49.1"
+
+/**
+ * Where a device that is added finds this phone. On the app's own network that is always the same address,
+ * whether sharing runs right now or not; the address the phone has at this moment on another network (the Wi-Fi
+ * at home, while sharing is off) is not it, and a device given that one never connected. Without the app's own
+ * network it is the address picked in the settings.
+ */
+internal fun deviceEndpoint(ownNetwork: Boolean, pickedIp: String?, port: Int): String =
+  if (ownNetwork || pickedIp == null) "$OWN_NETWORK_ADDRESS:$port" else "$pickedIp:$port"
+
 /** Share the internet of this phone, or use the internet of another phone. */
 /** The app's sections, in the bar at the bottom: sharing, data, settings, and joining another phone. */
 private enum class Tab(val title: String, val label: String) {
@@ -228,7 +247,7 @@ fun MainScreen() {
   var showSheet by remember { mutableStateOf(false) }
   var wifiQr by remember { mutableStateOf<ImageBitmap?>(null) }
   var showName by remember { mutableStateOf(false) }
-  var pairing by remember { mutableStateOf<Pairing?>(null) }
+  var pairing by shownPairing
   var removing by remember { mutableStateOf<String?>(null) }
   var problem by remember { mutableStateOf<String?>(null) }
   var ownNetwork by remember { mutableStateOf(ownNetworkPreference(context)) }
@@ -259,8 +278,9 @@ fun MainScreen() {
   var choosingLimit by remember { mutableStateOf(false) }
   var waitingComputer by remember { mutableStateOf(false) }
   val pairedEvent by PairingBridge.pairedEvents.collectAsStateWithLifecycle()
-  // Read again when the network changes: the user may give it a new name or password.
-  val wifi = remember(state.network) { WifiNetwork.credentials(context) }
+  // Read again when the network changes: the user may give it a new name or password. A change of the password
+  // alone leaves the name as it was, so the end of a change (and a change that failed) counts too.
+  val wifi = remember(state.network, state.wifiChange, state.error, state.running) { WifiNetwork.credentials(context) }
 
   val running by rememberUpdatedState(state.running)
   val onShareTab by rememberUpdatedState(tab == Tab.Share)
@@ -390,7 +410,15 @@ fun MainScreen() {
     } else {
       val wanted = buildList {
         if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
-        if (ownNetwork) add(if (Build.VERSION.SDK_INT >= 33) Manifest.permission.NEARBY_WIFI_DEVICES else Manifest.permission.ACCESS_FINE_LOCATION)
+        if (ownNetwork) {
+          if (Build.VERSION.SDK_INT >= 33) {
+            add(Manifest.permission.NEARBY_WIFI_DEVICES)
+          } else {
+            // Android 12 shows nothing at all when the precise location is asked for without the approximate one.
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
+            add(Manifest.permission.ACCESS_COARSE_LOCATION)
+          }
+        }
       }.filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
       if (wanted.isEmpty()) GatewayService.start(context, ownNetwork = ownNetwork) else permissions.launch(wanted.toTypedArray())
     }
@@ -659,7 +687,7 @@ fun MainScreen() {
       taken = peers,
       onCreate = { name, hours, mb ->
         addingGuest = false
-        val endpoint = "${selected?.ip}:${state.port}"
+        val endpoint = deviceEndpoint(ownNetwork && chosenIp == null, selected?.ip, state.port)
         try {
           val config = core.addPeer(name, endpoint)
           CoreHolder.save(context, core)
@@ -694,7 +722,7 @@ fun MainScreen() {
 
   if (showSheet) {
     AddDeviceSheet(
-      canScanQr = selected != null,
+      canScanQr = ownNetwork || selected != null,
       sharing = state.running,
       onComputer = {
         showSheet = false
@@ -741,7 +769,7 @@ fun MainScreen() {
   if (showName) {
     NameDeviceDialog(
       onCreate = { name ->
-        val endpoint = "${selected?.ip}:${state.port}"
+        val endpoint = deviceEndpoint(ownNetwork && chosenIp == null, selected?.ip, state.port)
         try {
           val config = core.addPeer(name, endpoint)
           CoreHolder.save(context, core)
@@ -779,11 +807,18 @@ fun MainScreen() {
     JoinConfirmDialog(
       join = join,
       onConfirm = {
-        pendingLink?.let { ClientStore.save(context, it) }
-        savedJoin = join
+        val link = pendingLink
         pendingJoin = null
         pendingLink = null
-        connect()
+        if (state.running || state.starting) {
+          // One or the other: a phone that shares its internet cannot take another phone's at the same time.
+          problem = "Bu telefon şu an internetini paylaşıyor. Başka bir telefona bağlanmak için önce paylaşımı durdur, sonra kodu yeniden okut."
+        } else {
+          link?.let { ClientStore.save(context, it) }
+          savedJoin = join
+          // A connection that runs goes over to the new phone; one that does not is started.
+          if (client.phase != ClientPhase.Idle) ClientService.reload(context) else connect()
+        }
       },
       onDismiss = {
         pendingJoin = null
@@ -847,6 +882,7 @@ fun MainScreen() {
         core.removePeer(name)
         CoreHolder.save(context, core)
         Guests.forget(context, name)
+        Controls.forget(context, name) // its limits and pauses: the next device of that name starts without them
         Updates.renewToken(context, core) // the removed device knew the store's token
         peers = peerNames(core)
         removing = null
@@ -1413,6 +1449,10 @@ private fun SettingsContent(
           Handler(Looper.getMainLooper()).post {
             val offer = OnlineUpdate.state.value.offer
             val text = when {
+              // While this device takes another phone's internet, the app's own connections stay outside the
+              // tunnel (they are the tunnel's way to that phone), so the app itself cannot reach GitHub.
+              !answered && ClientState.state.value.phase != ClientPhase.Idle ->
+                "Bu cihaz internetini başka bir telefondan alırken GitHub'a kendisi bakamaz. Yeni sürüm, paylaşan telefon güncellenince ondan gelir."
               !answered -> "GitHub'a ulaşılamadı. İnternet bağlantına bak."
               offer != null -> "AleShare ${offer.name} yayımlandı. Paylaş sekmesinden indirebilirsin."
               else -> "AleShare güncel."

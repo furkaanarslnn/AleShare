@@ -27,15 +27,15 @@ import (
 // does, over several connections at once (a mobile link shows its speed only that way), and stops at a budget of
 // data, since mobile data costs money.
 const (
-	speedHost    = "speed.cloudflare.com"
-	downStreams  = 4 // a mobile link shows its download speed only over several connections
-	upStreams    = 2 // fewer for uploads: each request waits for its answer, and fewer streams make bigger requests
-	speedWarmup  = time.Second // TCP's slow start: the first second is left out of the rate
-	downTime     = 8 * time.Second
-	upTime       = 6 * time.Second
-	downBudget   = 40 << 20
-	upBudget     = 16 << 20
-	speedChunk   = 8 << 20 // bytes asked for in one download request
+	speedHost   = "speed.cloudflare.com"
+	downStreams = 4           // a mobile link shows its download speed only over several connections
+	upStreams   = 2           // fewer for uploads: each request waits for its answer, and fewer streams make bigger requests
+	speedWarmup = time.Second // TCP's slow start: the first second is left out of the rate
+	downTime    = 8 * time.Second
+	upTime      = 6 * time.Second
+	downBudget  = 40 << 20
+	upBudget    = 16 << 20
+	speedChunk  = 8 << 20 // bytes asked for in one download request
 )
 
 // outbound is how sharing reaches the internet while it runs: its sockets are bound to the mobile network.
@@ -110,7 +110,9 @@ func measure(ctx context.Context, streams int, d time.Duration, budget int64, st
 		total += int64(n)
 		now := mark{time.Now(), total}
 		if warm.at.IsZero() && now.at.Sub(start) >= speedWarmup {
-			warm = mark{now.at, total - int64(n)} // what came before this count belongs to the warm-up
+			// What was counted up to now belongs to the warm-up, this count too: for an upload it is a whole
+			// request, megabytes that left before the mark, and counting it made uploads look faster than they are.
+			warm = mark{now.at, total}
 		}
 		last = now
 		over := total >= budget

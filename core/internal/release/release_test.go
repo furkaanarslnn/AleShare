@@ -50,8 +50,11 @@ func TestVerifyRefuses(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	// What update.json calls a release for the apps of 1.1, which knew only their own rule.
-	for code, name := range map[int]string{38: "1.0.38", 39: "1.1", 40: "1.1.1", 41: "1.1.2"} {
+}
+
+// What update.json calls a release for the apps of 1.1, which knew only their own rule.
+func TestManifestName(t *testing.T) {
+	for code, name := range map[int]string{38: "1.0.38", 39: "1.1", 40: "1.1.1", 41: "1.1.2", 42: "1.1.3"} {
 		if got := ManifestName(code); got != name {
 			t.Errorf("ManifestName(%d) = %q, want %q", code, got, name)
 		}

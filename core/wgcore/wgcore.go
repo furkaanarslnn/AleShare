@@ -156,9 +156,16 @@ func (c *Core) publish() {
 // peersChanged tells the parts that know the devices about the current list. Callers hold c.mu (or own c).
 func (c *Core) peersChanged() {
 	keys := make([]wgkey.Key, len(c.state.Peers))
+	var devices []wgkey.Key
 	for i, p := range c.state.Peers {
 		keys[i] = p.PublicKey
+		// A computer paired on the phone's screen with a key of its own; everything else was added with a code or a
+		// link, which carries a preshared key. Only computers get the token that changes the phone's switches.
+		if !p.PresharedKey.IsZero() {
+			devices = append(devices, p.PublicKey)
+		}
 	}
+	c.wifi.SetDevices(devices) // first: a new device must not be answered before it is known as one
 	c.wifi.SetPeers(keys)
 }
 
@@ -198,8 +205,9 @@ func (c *Core) AddPeer(name, endpoint string) (string, error) {
 // must persist StateJSON() afterwards.
 func (c *Core) RemovePeer(name string) bool {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	before := append([]provision.Peer(nil), c.state.Peers...)
 	if !c.state.RemovePeer(name) {
+		c.mu.Unlock()
 		return false
 	}
 	if c.srv != nil {
@@ -207,7 +215,47 @@ func (c *Core) RemovePeer(name string) bool {
 		c.srv.UpdatePeers(c.state.ServerPeers())
 	}
 	c.peersChanged()
+	gone, srv := c.goneLocked(before), c.srv
+	c.mu.Unlock()
+	c.forget(gone, srv)
 	return true
+}
+
+// goneLocked returns the tunnel addresses that the devices in before held and no longer hold. Callers hold c.mu.
+func (c *Core) goneLocked(before []provision.Peer) []netip.Addr {
+	holds := map[netip.Addr]wgkey.Key{}
+	for _, p := range c.state.Peers {
+		holds[p.IPv4], holds[p.IPv6] = p.PublicKey, p.PublicKey
+	}
+	var gone []netip.Addr
+	for _, p := range before {
+		for _, a := range []netip.Addr{p.IPv4, p.IPv6} {
+			if a.IsValid() && holds[a] != p.PublicKey {
+				gone = append(gone, a)
+			}
+		}
+	}
+	return gone
+}
+
+// forget drops what was kept under tunnel addresses whose device is gone: its flows, what it was counted, its speed
+// limit and its pause. Addresses are handed out again, lowest first, and the next device must not inherit them.
+// Called without c.mu.
+func (c *Core) forget(addrs []netip.Addr, srv *server.Server) {
+	if len(addrs) == 0 {
+		return
+	}
+	c.pol.mu.Lock()
+	for _, a := range addrs {
+		delete(c.pol.limits, a)
+		delete(c.pol.paused, a)
+	}
+	c.pol.mu.Unlock()
+	if srv != nil {
+		for _, a := range addrs {
+			srv.ForgetClient(a)
+		}
+	}
 }
 
 // PeerNames lists the registered clients, one per line.
@@ -351,8 +399,8 @@ func (c *Core) publishLocked() {
 	}
 	if c.updateSrv != nil {
 		app, pc, token := c.upd.offers()
-		info.App = &wifiinfo.App{Code: app.code, Name: app.name, Token: token}
-		info.PC = &wifiinfo.App{Code: pc.code, Name: pc.name, Token: token}
+		info.App = &wifiinfo.App{Code: app.code, Name: app.name, Token: token, DeviceToken: deviceToken(token)}
+		info.PC = &wifiinfo.App{Code: pc.code, Name: pc.name, Token: token, DeviceToken: deviceToken(token)}
 	}
 	c.wifi.SetInfo(info)
 }
@@ -595,10 +643,16 @@ func (e enroller) Enroll(name string, public wgkey.Key) (pairing.Grant, error) {
 	}
 	e.c.peersChanged()
 	port := e.c.wgPort
+	var gone []netip.Addr
+	if err == nil {
+		gone = e.c.goneLocked(previous) // a computer that pairs again under its name replaces its old self
+	}
+	srv := e.c.srv
 	e.c.mu.Unlock()
 	if err != nil {
 		return pairing.Grant{}, err
 	}
+	e.c.forget(gone, srv)
 	// Outside the lock: the app's callback reads the state.
 	e.l.Paired(name)
 	return pairing.Grant{

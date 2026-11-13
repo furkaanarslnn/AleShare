@@ -49,26 +49,26 @@ const (
 )
 
 var (
-	shellNotifyIcon        = shell32.NewProc("Shell_NotifyIconW")
-	registerClassEx        = user32.NewProc("RegisterClassExW")
-	createWindowEx         = user32.NewProc("CreateWindowExW")
-	defWindowProc          = user32.NewProc("DefWindowProcW")
-	getMessage             = user32.NewProc("GetMessageW")
-	translateMessage       = user32.NewProc("TranslateMessage")
-	dispatchMessage        = user32.NewProc("DispatchMessageW")
-	postQuitMessage        = user32.NewProc("PostQuitMessage")
-	loadImage              = user32.NewProc("LoadImageW")
-	getSystemMetrics       = user32.NewProc("GetSystemMetrics")
-	createPopupMenu        = user32.NewProc("CreatePopupMenu")
-	appendMenu             = user32.NewProc("AppendMenuW")
-	trackPopupMenu         = user32.NewProc("TrackPopupMenu")
-	destroyMenu            = user32.NewProc("DestroyMenu")
-	setForegroundWindow    = user32.NewProc("SetForegroundWindow")
-	getCursorPos           = user32.NewProc("GetCursorPos")
-	postMessage            = user32.NewProc("PostMessageW")
-	findWindow             = user32.NewProc("FindWindowW")
-	registerWindowMessage  = user32.NewProc("RegisterWindowMessageW")
-	getModuleHandle        = kernel32.NewProc("GetModuleHandleW")
+	shellNotifyIcon       = shell32.NewProc("Shell_NotifyIconW")
+	registerClassEx       = user32.NewProc("RegisterClassExW")
+	createWindowEx        = user32.NewProc("CreateWindowExW")
+	defWindowProc         = user32.NewProc("DefWindowProcW")
+	getMessage            = user32.NewProc("GetMessageW")
+	translateMessage      = user32.NewProc("TranslateMessage")
+	dispatchMessage       = user32.NewProc("DispatchMessageW")
+	postQuitMessage       = user32.NewProc("PostQuitMessage")
+	loadImage             = user32.NewProc("LoadImageW")
+	getSystemMetrics      = user32.NewProc("GetSystemMetrics")
+	createPopupMenu       = user32.NewProc("CreatePopupMenu")
+	appendMenu            = user32.NewProc("AppendMenuW")
+	trackPopupMenu        = user32.NewProc("TrackPopupMenu")
+	destroyMenu           = user32.NewProc("DestroyMenu")
+	setForegroundWindow   = user32.NewProc("SetForegroundWindow")
+	getCursorPos          = user32.NewProc("GetCursorPos")
+	postMessage           = user32.NewProc("PostMessageW")
+	findWindow            = user32.NewProc("FindWindowW")
+	registerWindowMessage = user32.NewProc("RegisterWindowMessageW")
+	getModuleHandle       = kernel32.NewProc("GetModuleHandleW")
 )
 
 // notifyIconData is NOTIFYICONDATAW.
@@ -403,6 +403,7 @@ type trayAlert struct {
 // trayAlerts remembers what was told already, so that each thing is told once until it is over.
 type trayAlerts struct {
 	seen        bool      // the first look only learns how things are
+	wasUp       bool      // the connection was up at some time since the icon started: only then is its loss news
 	downSince   time.Time // the tunnel went down at; zero while it is up
 	toldDown    bool
 	toldBattery bool
@@ -423,7 +424,7 @@ func (a *trayAlerts) check(connected bool, p *phoneStatus, name string, now time
 			a.downSince = now
 		}
 		// A short break (the tunnel reopening, the phone's network moving) is not worth a word.
-		if !first && !a.toldDown && now.Sub(a.downSince) >= 20*time.Second {
+		if !first && a.wasUp && !a.toldDown && now.Sub(a.downSince) >= 20*time.Second {
 			a.toldDown = true
 			out = append(out, trayAlert{"Telefonla bağlantı yok", "Telefon paylaşımı durdurdu ya da uzaklaştı. Paylaşım yeniden başlayınca bu bilgisayar kendiliğinden bağlanır.", true})
 		}
@@ -432,7 +433,7 @@ func (a *trayAlerts) check(connected bool, p *phoneStatus, name string, now time
 	if a.toldDown {
 		out = append(out, trayAlert{"Telefona yeniden bağlandı", "İnternet yeniden telefondan geliyor.", false})
 	}
-	a.downSince, a.toldDown = time.Time{}, false
+	a.downSince, a.toldDown, a.wasUp = time.Time{}, false, true
 	if p == nil {
 		return out
 	}

@@ -88,17 +88,24 @@ object Updates {
     return Apk(file.path, code, theirs.versionName ?: releaseName(code))
   }
 
+  /**
+   * From which Android on the signers are asked for the new way. Android 9 (28) knows that way too, but asked so
+   * about a file it leaves the signers empty (a fault of that release), and no APK brought to such a phone passed
+   * the check; it is asked the old way, for the file and for the installed app alike.
+   */
+  private const val NEW_SIGNERS = 29
+
   private fun archiveInfo(pm: PackageManager, file: File): PackageInfo? =
-    if (Build.VERSION.SDK_INT >= 28) pm.getPackageArchiveInfo(file.path, PackageManager.GET_SIGNING_CERTIFICATES)
+    if (Build.VERSION.SDK_INT >= NEW_SIGNERS) pm.getPackageArchiveInfo(file.path, PackageManager.GET_SIGNING_CERTIFICATES)
     else @Suppress("DEPRECATION") pm.getPackageArchiveInfo(file.path, PackageManager.GET_SIGNATURES)
 
   private fun installedInfo(pm: PackageManager, name: String): PackageInfo? = runCatching {
-    if (Build.VERSION.SDK_INT >= 28) pm.getPackageInfo(name, PackageManager.GET_SIGNING_CERTIFICATES)
+    if (Build.VERSION.SDK_INT >= NEW_SIGNERS) pm.getPackageInfo(name, PackageManager.GET_SIGNING_CERTIFICATES)
     else @Suppress("DEPRECATION") pm.getPackageInfo(name, PackageManager.GET_SIGNATURES)
   }.getOrNull()
 
   private fun signers(info: PackageInfo): Set<String> {
-    val sigs = if (Build.VERSION.SDK_INT >= 28) info.signingInfo?.apkContentsSigners else @Suppress("DEPRECATION") info.signatures
+    val sigs = if (Build.VERSION.SDK_INT >= NEW_SIGNERS) info.signingInfo?.apkContentsSigners else @Suppress("DEPRECATION") info.signatures
     return sigs.orEmpty().map { it.toCharsString() }.toSet()
   }
 

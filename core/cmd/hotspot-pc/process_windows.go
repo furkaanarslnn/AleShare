@@ -13,7 +13,7 @@ import (
 var consoleWindow = kernel32.NewProc("GetConsoleWindow")
 
 // hasConsole reports whether this process has a console window: started from a terminal, or given one for an
-// elevated command-line run. The window and the scheduled task have none.
+// elevated command-line run. The window and the watcher service have none.
 func hasConsole() bool {
 	h, _, _ := consoleWindow.Call()
 	return h != 0
@@ -58,8 +58,25 @@ func createShortcut() error {
 func removeLater() {
 	script := `for ($i = 0; $i -lt 300; $i++) { ` +
 		`try { Remove-Item -LiteralPath ` + psQuote(installedExe()) + ` -Force -ErrorAction Stop; break } catch { Start-Sleep 2 } }; ` +
-		`Remove-Item -LiteralPath ` + psQuote(installedExe()+".old") + ` -Force -ErrorAction SilentlyContinue; ` +
+		`Remove-Item -Path ` + psQuote(installedExe()+".old*") + ` -Force -ErrorAction SilentlyContinue; ` +
 		`Remove-Item -LiteralPath ` + psQuote(dataDir()) + ` -ErrorAction SilentlyContinue`
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW | windows.DETACHED_PROCESS}
+	_ = cmd.Start()
+}
+
+// removeFolderLater deletes a folder once nothing holds a file in it any more (the window keeps its browser data
+// open while it shows): a folder that can be renamed is free, and only then is it removed, whole. It tries every
+// two seconds for up to ten minutes.
+func removeFolderLater(dir string) {
+	if _, err := os.Stat(dir); err != nil {
+		return
+	}
+	gone := dir + ".removed"
+	script := `for ($i = 0; $i -lt 300; $i++) { ` +
+		`if (-not (Test-Path -LiteralPath ` + psQuote(dir) + `)) { break }; ` +
+		`try { Rename-Item -LiteralPath ` + psQuote(dir) + ` -NewName ` + psQuote(filepath.Base(gone)) + ` -ErrorAction Stop; ` +
+		`Remove-Item -LiteralPath ` + psQuote(gone) + ` -Recurse -Force -ErrorAction SilentlyContinue; break } catch { Start-Sleep 2 } }`
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW | windows.DETACHED_PROCESS}
 	_ = cmd.Start()

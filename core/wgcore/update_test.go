@@ -170,8 +170,21 @@ func TestPhoneStatusAndControls(t *testing.T) {
 	}
 	s.do(t, "POST", "/phone?t="+s.tok, []byte(`{"split":true}`))
 	s.do(t, "POST", "/phone?t="+s.tok, []byte(`{"limit_mb":2048}`))
+	// A device that is no computer reads the state and may have the speed measured; it changes nothing else.
+	less := deviceToken(s.tok)
+	if code, body := s.do(t, "GET", "/phone?t="+less, nil); code != 200 || body != `{"battery":81}` {
+		t.Fatalf("state for a device: %d %q", code, body)
+	}
+	for _, body := range []string{`{"resume":"Misafir"}`, `{"limit_mb":0}`, `{"speedtest":true,"split":false}`, `{"speedtest":false}`, `{"speedtest":"true"}`} {
+		if code, _ := s.do(t, "POST", "/phone?t="+less, []byte(body)); code != http.StatusForbidden {
+			t.Errorf("a device asked for %s: %d", body, code)
+		}
+	}
+	if code, _ := s.do(t, "POST", "/phone?t="+less, []byte(`{"speedtest":true}`)); code != 200 {
+		t.Errorf("a device asked for a speed test: %d", code)
+	}
 	c := &Core{upd: s.u}
-	if got := c.TakeControls(); got != "{\"split\":true}\n{\"limit_mb\":2048}" {
+	if got := c.TakeControls(); got != "{\"split\":true}\n{\"limit_mb\":2048}\n{\"speedtest\":true}" {
 		t.Fatalf("controls %q", got)
 	}
 	if c.TakeControls() != "" {

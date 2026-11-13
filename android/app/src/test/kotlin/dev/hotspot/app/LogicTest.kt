@@ -318,13 +318,13 @@ class LogicTest {
   @Test
   fun onlineReleasesMustBeThisProjects() {
     val sum = "ab".repeat(32)
-    val url = "https://github.com/${OnlineUpdate.REPO}/releases/download/v1.1.1/AleShare-1.1.1.apk"
-    assertTrue(OnlineUpdate.valid(40, "1.1.1", url, 25_000_000, sum))
-    assertFalse("another site", OnlineUpdate.valid(40, "1.1.1", "https://example.com/AleShare-1.1.1.apk", 25_000_000, sum))
-    assertFalse("another repository", OnlineUpdate.valid(40, "1.1.1", url.replace(OnlineUpdate.REPO, "someone/AleShare"), 25_000_000, sum))
-    assertFalse("no name", OnlineUpdate.valid(40, "", url, 25_000_000, sum))
-    assertFalse("no size", OnlineUpdate.valid(40, "1.1.1", url, 0, sum))
-    assertFalse("a short checksum", OnlineUpdate.valid(40, "1.1.1", url, 25_000_000, "abcd"))
+    val url = "https://github.com/${OnlineUpdate.REPO}/releases/download/v1.2.1/AleShare.apk"
+    assertTrue(OnlineUpdate.valid(41, "1.2.1", url, 25_000_000, sum))
+    assertFalse("another site", OnlineUpdate.valid(41, "1.2.1", "https://example.com/AleShare.apk", 25_000_000, sum))
+    assertFalse("another repository", OnlineUpdate.valid(41, "1.2.1", url.replace(OnlineUpdate.REPO, "someone/AleShare"), 25_000_000, sum))
+    assertFalse("no name", OnlineUpdate.valid(41, "", url, 25_000_000, sum))
+    assertFalse("no size", OnlineUpdate.valid(41, "1.2.1", url, 0, sum))
+    assertFalse("a short checksum", OnlineUpdate.valid(41, "1.2.1", url, 25_000_000, "abcd"))
   }
 
   @Test
@@ -339,4 +339,33 @@ class LogicTest {
     assertTrue("a clock set back must not silence the looks", OnlineUpdate.due(t0 - hour, t0, t0))
   }
 
+  // The mark "sharing is on" counts only shortly after sharing last said it runs: an update ends the process and the
+  // new release starts within minutes, while a mark left by a crash days ago must start nothing.
+  @Test
+  fun aStaleSharingMarkStartsNothing() {
+    val now = 1_800_000_000_000L
+    assertTrue("a moment ago", sharingFresh(now - 30_000, now))
+    assertTrue("a slow update", sharingFresh(now - 8 * 60_000, now))
+    assertFalse("yesterday", sharingFresh(now - 24 * 3_600_000L, now))
+    assertFalse("the clock was set back", sharingFresh(now + 3_600_000, now))
+    assertTrue("a mark from before the time was written", sharingFresh(0, now))
+  }
+
+  // A device that is added finds the phone on the app's own network at the one address Android gives it there, not
+  // at the address the phone happens to have on the Wi-Fi at home.
+  @Test
+  fun aDeviceIsGivenTheAddressOfTheNetworkItWillJoin() {
+    assertEquals("192.168.49.1:51820", dev.hotspot.app.ui.deviceEndpoint(ownNetwork = true, pickedIp = "192.168.1.23", port = 51820))
+    assertEquals("192.168.49.1:51820", dev.hotspot.app.ui.deviceEndpoint(ownNetwork = true, pickedIp = null, port = 51820))
+    assertEquals("192.168.43.1:51820", dev.hotspot.app.ui.deviceEndpoint(ownNetwork = false, pickedIp = "192.168.43.1", port = 51820))
+  }
+
+  // A pause for a daily limit (or the pass the user gave past it) goes when the limit changes; a pause by hand stays.
+  @Test
+  fun onlyALimitsPauseGoesWithTheLimit() {
+    assertTrue(limitMark("2026-11-13"))
+    assertTrue(limitMark("free:2026-11-13"))
+    assertFalse(limitMark("manual"))
+    assertFalse(limitMark(null))
+  }
 }

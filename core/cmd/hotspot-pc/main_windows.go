@@ -10,7 +10,7 @@
 //
 // Started without arguments (a double click) it opens its window (HTML drawn by Edge
 // WebView2, see ui/index.html), which walks through the setup or shows the state and
-// the settings. The commands below are for the command line and the scheduled task.
+// the settings. The commands below are for the command line and the watcher service.
 package main
 
 import (
@@ -97,7 +97,7 @@ func main() {
 	useConsole(isElevatedRelaunch())
 	var err error
 	switch cmd {
-	case "help", "yardim", "-h", "--help":
+	case "help", "yardım", "yardim", "-h", "--help":
 		usage()
 	case "setup":
 		err = cmdSetup(args)

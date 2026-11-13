@@ -90,11 +90,10 @@ func TestSplitPointsOfCutShortHellos(t *testing.T) {
 // recorder keeps what is written to it, one entry per Write.
 type recorder struct {
 	net.Conn
-	writes      [][]byte
-	closed      bool
-	failAfter   int // fail from this write on; 0 never
-	halfClosed  bool
-	canHalfShut bool
+	writes     [][]byte
+	closed     bool
+	failAfter  int // fail from this write on; 0 never
+	halfClosed bool
 }
 
 func (r *recorder) Write(b []byte) (int, error) {

@@ -288,7 +288,9 @@ func newMemTunnel(tb testing.TB, d gateway.Dialer, opts gateway.Options) *tunnel
 }
 
 // BenchmarkDownlink measures a download through the tunnel over loopback UDP: what a computer sees end to end.
-func BenchmarkDownlink(b *testing.B) { benchmarkDownlink(b, newTunnel(b, sourceDialer{}, gateway.Options{})) }
+func BenchmarkDownlink(b *testing.B) {
+	benchmarkDownlink(b, newTunnel(b, sourceDialer{}, gateway.Options{}))
+}
 
 // BenchmarkDownlinkMemory leaves the operating system's UDP out: the tunnel's own cost, both ends together. For
 // the gateway's share alone, take a CPU profile and narrow it with -tagfocus side=server.
@@ -332,4 +334,92 @@ func benchmarkDownlink(b *testing.B, tn *tunnel) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	time.Sleep(500 * time.Millisecond)
+}
+
+// A server on the internet that resets a connection half-way: the client must see it break, not end. (An end is
+// what a finished download looks like.) With and without the splitting of the first bytes, which wraps the
+// outgoing connection.
+func TestResetFromTheInternetReachesTheClientAsAReset(t *testing.T) {
+	for name, split := range map[string]bool{"plain": false, "split": true} {
+		t.Run(name, func(t *testing.T) {
+			l, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer l.Close()
+			go func() {
+				for {
+					c, err := l.Accept()
+					if err != nil {
+						return
+					}
+					go func() {
+						io.ReadFull(c, make([]byte, 4))
+						c.Write([]byte("half of the fi"))
+						time.Sleep(300 * time.Millisecond) // let it reach the client first
+						c.(*net.TCPConn).SetLinger(0)
+						c.Close() // a reset
+					}()
+				}
+			}()
+			tn := newTunnel(t, &fakeDialer{tcpAddr: l.Addr().String(), seen: make(chan string, 16)}, gateway.Options{Split: func() bool { return split }})
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			c, err := tn.tnet.DialContextTCPAddrPort(ctx, netip.MustParseAddrPort("203.0.113.5:80"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			c.Write([]byte("GET "))
+			c.SetReadDeadline(time.Now().Add(10 * time.Second))
+			got, err := io.ReadAll(c)
+			if err == nil {
+				t.Fatalf("the client saw the connection end cleanly after %q", got)
+			}
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				t.Fatalf("the client was told nothing: %v", err)
+			}
+			if string(got) != "half of the fi" {
+				t.Fatalf("the client got %q before the reset", got)
+			}
+		})
+	}
+}
+
+// A server that finishes the usual way still ends cleanly for the client, with everything it sent.
+func TestCleanEndStaysClean(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	body := make([]byte, 600<<10)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				io.ReadFull(c, make([]byte, 4))
+				c.Write(body)
+				c.Close()
+			}()
+		}
+	}()
+	tn := newTunnel(t, &fakeDialer{tcpAddr: l.Addr().String(), seen: make(chan string, 16)}, gateway.Options{})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c, err := tn.tnet.DialContextTCPAddrPort(ctx, netip.MustParseAddrPort("203.0.113.5:80"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.Write([]byte("GET "))
+	c.SetReadDeadline(time.Now().Add(20 * time.Second))
+	got, err := io.ReadAll(c)
+	if err != nil || len(got) != len(body) {
+		t.Fatalf("got %d of %d bytes, %v", len(got), len(body), err)
+	}
 }

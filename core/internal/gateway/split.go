@@ -20,6 +20,9 @@ type splitConn struct {
 	done  bool          // the first write has been seen; only the pump from the client to the internet writes
 }
 
+// Unwrap gives the connection underneath (see abort).
+func (c *splitConn) Unwrap() net.Conn { return c.Conn }
+
 func (c *splitConn) Write(b []byte) (int, error) {
 	if c.done {
 		return c.Conn.Write(b)

@@ -271,6 +271,8 @@ fun QrDialog(
   var kind by remember { mutableStateOf(if (guestNote != null && wifi != null) QrKind.Wifi else if (hotspot != null) QrKind.Hotspot else QrKind.WireGuard) }
   AlertDialog(
     onDismissRequest = onDismiss,
+    // The code is shown once: a touch beside the dialog must not be what closes it.
+    properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false),
     shape = MaterialTheme.shapes.large,
     title = { Text(name) },
     text = {

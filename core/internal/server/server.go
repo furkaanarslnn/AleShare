@@ -5,8 +5,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/netip"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.zx2c4.com/wireguard/conn"
@@ -40,6 +42,17 @@ type Config struct {
 type Server struct {
 	dev *device.Device
 	gw  *gateway.Gateway
+
+	mu    sync.Mutex
+	peers map[wgkey.Key]Peer // the clients the device knows now
+}
+
+func byKey(peers []Peer) map[wgkey.Key]Peer {
+	m := make(map[wgkey.Key]Peer, len(peers))
+	for _, p := range peers {
+		m[p.PublicKey] = p
+	}
+	return m
 }
 
 // uapi renders cfg in wireguard-go's userspace configuration format.
@@ -52,16 +65,51 @@ func peersUAPI(peers []Peer) string {
 	var b strings.Builder
 	b.WriteString("replace_peers=true\n")
 	for _, p := range peers {
-		fmt.Fprintf(&b, "public_key=%s\n", p.PublicKey.Hex())
-		if !p.PresharedKey.IsZero() {
-			fmt.Fprintf(&b, "preshared_key=%s\n", p.PresharedKey.Hex())
+		peerUAPI(&b, p)
+	}
+	return b.String()
+}
+
+func peerUAPI(b *strings.Builder, p Peer) {
+	fmt.Fprintf(b, "public_key=%s\n", p.PublicKey.Hex())
+	if !p.PresharedKey.IsZero() {
+		fmt.Fprintf(b, "preshared_key=%s\n", p.PresharedKey.Hex())
+	}
+	if p.IPv4.IsValid() {
+		fmt.Fprintf(b, "allowed_ip=%s/32\n", p.IPv4)
+	}
+	if p.IPv6.IsValid() {
+		fmt.Fprintf(b, "allowed_ip=%s/128\n", p.IPv6)
+	}
+}
+
+// peersDelta renders what turns the peer set old into next and touches nobody else: a peer that left is removed, a
+// new one is added, one whose addresses or preshared key changed is set up afresh. The peers that stay keep their
+// sessions. (Replacing the whole set would throw every session away: each client's traffic would then stall until
+// it notices, some fifteen seconds, whenever a device is added or removed.)
+func peersDelta(old map[wgkey.Key]Peer, next []Peer) string {
+	var b strings.Builder
+	stays := make(map[wgkey.Key]bool, len(next))
+	for _, p := range next {
+		stays[p.PublicKey] = true
+		was, known := old[p.PublicKey]
+		if known && was == p {
+			continue
 		}
-		if p.IPv4.IsValid() {
-			fmt.Fprintf(&b, "allowed_ip=%s/32\n", p.IPv4)
+		if known {
+			fmt.Fprintf(&b, "public_key=%s\nremove=true\n", p.PublicKey.Hex())
 		}
-		if p.IPv6.IsValid() {
-			fmt.Fprintf(&b, "allowed_ip=%s/128\n", p.IPv6)
+		peerUAPI(&b, p)
+	}
+	var gone []string
+	for key := range old {
+		if !stays[key] {
+			gone = append(gone, key.Hex())
 		}
+	}
+	sort.Strings(gone)
+	for _, key := range gone {
+		fmt.Fprintf(&b, "public_key=%s\nremove=true\n", key)
 	}
 	return b.String()
 }
@@ -85,7 +133,7 @@ func Start(cfg Config) (*Server, error) {
 		dev.Close()
 		return nil, fmt.Errorf("server: up: %w", err)
 	}
-	return &Server{dev: dev, gw: gw}, nil
+	return &Server{dev: dev, gw: gw, peers: byKey(cfg.Peers)}, nil
 }
 
 // Stats returns the gateway's anonymous counters.
@@ -98,11 +146,26 @@ func (s *Server) CutClient(client netip.Addr) int { return s.gw.CutClient(client
 // gateway.Gateway.ClientBytes).
 func (s *Server) ClientBytes() map[netip.Addr]int64 { return s.gw.ClientBytes() }
 
-// UpdatePeers replaces the set of allowed clients while the server runs.
-// Connected clients re-handshake transparently on their next packet.
+// UpdatePeers makes peers the set of allowed clients while the server runs. Clients that stay are not touched:
+// their traffic goes on.
 func (s *Server) UpdatePeers(peers []Peer) error {
-	return s.dev.IpcSet(peersUAPI(peers))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if delta := peersDelta(s.peers, peers); delta != "" {
+		if err := s.dev.IpcSet(delta); err != nil {
+			// The device may be half-way: put the whole set, at the price of everyone's session.
+			if err := s.dev.IpcSet(peersUAPI(peers)); err != nil {
+				return err
+			}
+		}
+	}
+	s.peers = byKey(peers)
+	return nil
 }
+
+// ForgetClient ends the flows of the client with this tunnel address and drops what was counted for it (see
+// gateway.Gateway.ForgetClient).
+func (s *Server) ForgetClient(client netip.Addr) { s.gw.ForgetClient(client) }
 
 // PeerStat is what the server knows of one peer's traffic.
 type PeerStat struct {

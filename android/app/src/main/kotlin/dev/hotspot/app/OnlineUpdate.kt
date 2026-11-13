@@ -127,6 +127,7 @@ object OnlineUpdate {
   private fun publish(context: Context) {
     val p = prefs(context)
     val own = ownVersionCode(context)
+    sweep(context, own)
     val offer = p.getString(KEY_MANIFEST, null)?.let { parse(it) }?.takeIf { it.code > own }
     _state.update { s ->
       when {
@@ -142,6 +143,17 @@ object OnlineUpdate {
   }
 
   private fun target(context: Context, r: Release) = File(Updates.storeDir(context), "received-online-${r.code}.apk")
+
+  /**
+   * Throws away the downloads of releases this app has reached. A phone that shares does so whenever sharing
+   * starts ([Updates.bestApk]); a device that only connects never gets there, and kept every one it downloaded.
+   */
+  private fun sweep(context: Context, own: Long) {
+    Updates.storeDir(context).listFiles { f -> f.name.startsWith("received-online-") }?.forEach { f ->
+      val code = f.name.removePrefix("received-online-").substringBefore('.').toLongOrNull()
+      if (code == null || code <= own) f.delete()
+    }
+  }
 
   /** The release's APK when it was downloaded before and is still the right file. */
   private fun downloaded(context: Context, r: Release): File? =

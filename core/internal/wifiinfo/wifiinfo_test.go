@@ -186,3 +186,55 @@ func TestValid(t *testing.T) {
 		}
 	}
 }
+
+// Requests from nobody paired, however many, take nothing from what a paired device may ask; and one device's
+// requests take nothing from another's.
+func TestStrangersDoNotUseTheAllowanceUp(t *testing.T) {
+	server, device, other, stranger := wgkey.Generate(), wgkey.Generate(), wgkey.Generate(), wgkey.Generate()
+	r := NewResponder(server)
+	r.SetPeers([]wgkey.Key{device.Public(), other.Public()})
+	r.SetInfo(&Info{Current: current})
+	c := []byte("0123456789abcdef")
+	request := func(private wgkey.Key) []byte {
+		k, _ := pairKey(private, server.Public())
+		return append(append([]byte(magic), c...), requestTag(k, c)...)
+	}
+	for i := 0; i < 50*burst; i++ {
+		if r.Answer(request(stranger)) != nil {
+			t.Fatal("a stranger got an answer")
+		}
+	}
+	for i := 0; i < 3*burst; i++ {
+		r.Answer(request(other))
+	}
+	if r.Answer(request(device)) == nil {
+		t.Fatal("a paired device got no answer after others asked a lot")
+	}
+}
+
+// A device named with SetDevices is told its own token, a computer the other one.
+func TestDevicesGetTheirOwnToken(t *testing.T) {
+	server, computer, tablet := wgkey.Generate(), wgkey.Generate(), wgkey.Generate()
+	r := NewResponder(server)
+	r.SetDevices([]wgkey.Key{tablet.Public()})
+	r.SetPeers([]wgkey.Key{computer.Public(), tablet.Public()})
+	r.SetInfo(&Info{Current: current, App: &App{Code: 41, Name: "1.2.1", Token: "full", DeviceToken: "less"}, PC: &App{Code: 41, Token: "full", DeviceToken: "less"}})
+	addr := phone(t, r, nil)
+	for name, c := range map[string]struct {
+		key  wgkey.Key
+		want string
+	}{"computer": {computer, "full"}, "tablet": {tablet, "less"}} {
+		info, err := ask(t, addr, c.key, server.Public(), 2*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.App == nil || info.App.Token != c.want || info.PC == nil || info.PC.Token != c.want || info.App.Code != 41 {
+			t.Errorf("%s was told %+v, %+v", name, info.App, info.PC)
+		}
+	}
+	// A phone that made no token for devices gives them none, never the computers'.
+	r.SetInfo(&Info{Current: current, App: &App{Code: 41, Token: "full"}})
+	if info, err := ask(t, addr, tablet, server.Public(), 2*time.Second); err != nil || info.App.Token != "" {
+		t.Fatalf("tablet without a device token: %+v, %v", info.App, err)
+	}
+}

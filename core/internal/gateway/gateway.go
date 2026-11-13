@@ -41,7 +41,11 @@ import (
 const (
 	nicID tcpip.NICID = 1
 
-	maxInFlightSYN  = 2048
+	maxInFlightSYN = 2048
+	// Each flow costs an outgoing socket, buffers and goroutines. A device, or a program gone wild on one, must not
+	// be able to open them without end: the app would run out of sockets for everybody.
+	maxClientFlows  = 1024
+	maxFlows        = 6000
 	dialTimeout     = 10 * time.Second
 	tcpDrainTimeout = 2 * time.Minute
 	udpIdleTimeout  = time.Minute
@@ -380,7 +384,7 @@ func (g *Gateway) handleTCP(r *tcp.ForwarderRequest) {
 	}
 	client, _ := addrPort(id.RemoteAddress, id.RemotePort)
 	target, allowed := g.resolve(dst)
-	if !allowed || g.paused(client.Addr()) {
+	if !allowed || g.paused(client.Addr()) || g.flows.full(client.Addr()) {
 		r.Complete(true)
 		return
 	}
@@ -414,7 +418,7 @@ func (g *Gateway) handleTCP(r *tcp.ForwarderRequest) {
 	ep.SetSockOptInt(tcpip.KeepaliveCountOption, g.opts.KeepAliveCount)
 	userTimeout := tcpip.TCPUserTimeoutOption(g.opts.UserTimeout)
 	ep.SetSockOpt(&userTimeout)
-	in := gonet.NewTCPConn(&wq, ep)
+	in := &stackConn{TCPConn: gonet.NewTCPConn(&wq, ep), ep: ep}
 	if g.opts.Split != nil && g.opts.Split() {
 		out = &splitConn{Conn: out, count: &g.stats.tcpSplit}
 	}
@@ -425,13 +429,60 @@ func (g *Gateway) handleTCP(r *tcp.ForwarderRequest) {
 	g.relayTCP(in, out, client.Addr())
 }
 
+// stackConn is the client's end of a TCP flow, with the one thing gonet leaves out: closing it as broken.
+type stackConn struct {
+	*gonet.TCPConn
+	ep tcpip.Endpoint
+}
+
+// SetLinger is net.TCPConn's: after SetLinger(0), Close resets the connection.
+func (c *stackConn) SetLinger(sec int) error {
+	c.ep.SocketOptions().SetLinger(tcpip.LingerOption{Enabled: sec >= 0, Timeout: time.Duration(max(sec, 0)) * time.Second})
+	return nil
+}
+
+// abort closes c so that its other end sees the connection break (a reset) and not end. A connection that only
+// knows how to close is closed.
+func abort(c net.Conn) {
+	for inner := c; inner != nil; {
+		if l, ok := inner.(interface{ SetLinger(int) error }); ok {
+			l.SetLinger(0)
+			break
+		}
+		w, ok := inner.(interface{ Unwrap() net.Conn })
+		if !ok {
+			break
+		}
+		inner = w.Unwrap()
+	}
+	c.Close()
+}
+
 // relayTCP copies both directions until both ended, an error occurs, or one
 // direction has been finished for longer than tcpDrainTimeout.
+//
+// A flow that breaks (one side reset it or went silent, or the device was paused) is passed on as broken, a reset,
+// to both sides. Closing it the plain way told the client that the server had finished: a download cut half-way
+// then looked complete to programs that take the end of the connection for the end of the file.
 func (g *Gateway) relayTCP(in, out net.Conn, client netip.Addr) {
 	var once sync.Once
-	closeBoth := func() { once.Do(func() { in.Close(); out.Close() }) }
+	end := func(broken bool) {
+		once.Do(func() {
+			if broken {
+				abort(in)
+				abort(out)
+				return
+			}
+			in.Close()
+			out.Close()
+		})
+	}
+	closeBoth, breakBoth := func() { end(false) }, func() { end(true) }
 	defer closeBoth()
-	defer g.flows.add(client, closeBoth)()
+	defer g.flows.add(client, breakBoth)()
+	if g.paused(client) {
+		return // paused while the connection was being made: the cut that came with the pause did not see it yet
+	}
 
 	var (
 		wg     sync.WaitGroup
@@ -441,7 +492,7 @@ func (g *Gateway) relayTCP(in, out net.Conn, client netip.Addr) {
 	half := func(dst, src net.Conn, dir int, client netip.Addr) {
 		defer wg.Done()
 		if err := g.pipe(dst, src, dir, client); err != nil {
-			closeBoth()
+			breakBoth()
 			return
 		}
 		// Clean EOF: pass the FIN on and give the other direction bounded time.
@@ -515,7 +566,7 @@ func (g *Gateway) handleUDP(r *udp.ForwarderRequest) {
 	service := g.service(dst)
 	client, _ := addrPort(id.RemoteAddress, id.RemotePort)
 	target, allowed := g.resolve(dst)
-	if (!allowed || g.paused(client.Addr())) && !local && service == nil {
+	if (!allowed || g.paused(client.Addr()) || g.flows.full(client.Addr())) && !local && service == nil {
 		return
 	}
 	var wq waiter.Queue
@@ -732,6 +783,9 @@ func (g *Gateway) relayUDP(in net.Conn, target netip.AddrPort, client netip.Addr
 	}
 	defer out.Close()
 	defer g.flows.add(client, func() { in.Close(); out.Close() })()
+	if g.paused(client) {
+		return // paused while the socket was being opened
+	}
 	used := g.usage.of(client)
 	// A call or a game: a steady stream of small datagrams from the client turns the priority on.
 	var window rtWindow

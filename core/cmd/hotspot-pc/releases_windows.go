@@ -64,37 +64,61 @@ func keepSiblingAPK(program string) {
 	logf("APK %s saklandı (telefonlara verilmek üzere)", release.Name(best))
 }
 
-// syncReleases moves releases between this computer and the phone after it answered (info), through the tunnel or
-// on the Wi-Fi network. It runs in the scheduled task, as SYSTEM.
+// nameOf is what the phone calls a release it told of; a phone that gave no name leaves it to the number.
+func nameOf(a *wifiinfo.App) string {
+	if a == nil {
+		return ""
+	}
+	if a.Name != "" {
+		return a.Name
+	}
+	return release.Name(a.Code)
+}
+
+// syncReleases notes what the phone said it has (info) and, while the tunnel is up, moves releases between this
+// computer and the phone through it. It runs in the watcher service, as SYSTEM.
 func syncReleases(set settings, info wifiinfo.Info, viaTunnel bool) {
 	if info.App == nil || info.App.Token == "" {
 		return // an older phone app: it neither hands out nor takes releases this way
 	}
 	savePhoneAccess(info.App.Token) // for the window (see phone_windows.go)
 	s := loadReleases()
-	defer func() { saveReleases(s) }()
 	phonePC := 0
 	if info.PC != nil {
 		phonePC = info.PC.Code
 	}
-	s.PhoneApp, s.PhonePC = info.App.Code, phonePC
-	host := set.Phone
-	if viaTunnel {
-		host = tunnelGateway
+	if s.PhoneApp != info.App.Code || s.PhonePC != phonePC || s.PhoneAppName != nameOf(info.App) {
+		s.PhoneApp, s.PhonePC, s.PhoneAppName = info.App.Code, phonePC, nameOf(info.App)
+		saveReleases(s)
+	}
+	if !viaTunnel {
+		// The tunnel is about to open and the user waits for the internet: files that take minutes do not go
+		// first. They move on the next look, through the tunnel.
+		return
 	}
 	url := func(file string) string {
-		return "http://" + net.JoinHostPort(host, strconv.Itoa(updatePort)) + "/" + file + "?t=" + info.App.Token
+		return "http://" + net.JoinHostPort(tunnelGateway, strconv.Itoa(updatePort)) + "/" + file + "?t=" + info.App.Token
 	}
 	own := versionCode(version)
 	plan := planSync(own, s.APK, info.App.Code, phonePC)
 	now := time.Now()
-
-	if plan.takeProgram && s.due("take-pc", phonePC, now) {
-		if err := takeProgram(url("hotspot-pc.exe"), own); err != nil {
-			logf("telefondaki program (%s) alınamadı: %v", release.Name(phonePC), err)
+	// The try is written down before it starts: one that is cut short (the service restarted, the computer went
+	// to sleep) then waits its time like one the phone turned away, instead of being tried again every minute.
+	try := func(what string, code int) bool {
+		if !s.due(what, code, now) {
+			return false
 		}
+		saveReleases(s)
+		return true
 	}
-	if plan.bringProgram && s.due("bring-pc", own, now) {
+	// One transfer a look: each may take minutes, and a look that takes too long is taken for stuck (see
+	// reconcileLimit). The others follow on the next looks, a minute apart.
+	switch {
+	case plan.takeProgram && try("take-pc", phonePC):
+		if err := takeProgram(url("hotspot-pc.exe"), own); err != nil {
+			logf("telefondaki program (%s) alınamadı: %v", nameOf(info.PC), err)
+		}
+	case plan.bringProgram && try("bring-pc", own):
 		if data, err := os.ReadFile(installedExe()); err != nil {
 			logf("program okunamadı: %v", err)
 		} else if _, err := release.Verify(data); err != nil {
@@ -102,18 +126,17 @@ func syncReleases(set settings, info wifiinfo.Info, viaTunnel bool) {
 		} else if err := post(url("hotspot-pc.exe"), data); err != nil {
 			logf("program telefona verilemedi: %v", err)
 		} else {
-			logf("program %s telefona verildi", release.Name(own))
+			logf("program %s telefona verildi", version)
 		}
-	}
-	if plan.takeAPK && s.due("take-apk", info.App.Code, now) {
+	case plan.takeAPK && try("take-apk", info.App.Code):
 		if err := download(url("hotspot.apk"), keptAPK(), 200<<20); err != nil {
-			logf("telefondaki APK (%s) alınamadı: %v", release.Name(info.App.Code), err)
+			logf("telefondaki APK (%s) alınamadı: %v", nameOf(info.App), err)
 		} else {
 			s.APK = info.App.Code
-			logf("telefondaki APK %s saklandı", release.Name(s.APK))
+			saveReleases(s)
+			logf("telefondaki APK %s saklandı", nameOf(info.App))
 		}
-	}
-	if plan.bringAPK && s.due("bring-apk", s.APK, now) {
+	case plan.bringAPK && try("bring-apk", s.APK):
 		if data, err := os.ReadFile(keptAPK()); err != nil {
 			logf("APK okunamadı: %v", err)
 		} else if err := post(url("hotspot.apk")+"&code="+strconv.Itoa(s.APK), data); err != nil {
@@ -127,10 +150,11 @@ func syncReleases(set settings, info wifiinfo.Info, viaTunnel bool) {
 // updatePort is the phone's store (wgcore.UpdatePort).
 const updatePort = 51823
 
-var transfers = &http.Client{Timeout: 3 * time.Minute}
+// transfers moves one file to or from the phone, in less time than a look of the watcher may take (reconcileLimit).
+var transfers = &http.Client{Timeout: 150 * time.Second}
 
 // takeProgram downloads the phone's Windows program and installs it in place of this one, if it carries this
-// project's release signature and is newer than own. The task's next run is the new program.
+// project's release signature and is newer than own. The watcher's next look is the new program's.
 func takeProgram(url string, own int) error {
 	path := filepath.Join(dataDir(), "hotspot-pc.download")
 	defer os.Remove(path)
@@ -158,7 +182,7 @@ func takeProgram(url string, own int) error {
 func download(url, path string, max int64) error {
 	resp, err := transfers.Get(url)
 	if err != nil {
-		return err
+		return bare(err) // without the address: it carries the phone's token, and this error is logged
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -186,7 +210,7 @@ func download(url, path string, max int64) error {
 func post(url string, data []byte) error {
 	resp, err := transfers.Post(url, "application/octet-stream", bytes.NewReader(data))
 	if err != nil {
-		return err
+		return bare(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

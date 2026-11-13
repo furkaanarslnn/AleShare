@@ -23,6 +23,11 @@ const (
 	queryTimeout = 4 * time.Second
 	// Connections stay open between queries: one TLS handshake, then each query costs a round trip.
 	idleConnTimeout = 90 * time.Second
+	// When no server answered, the fallback is asked directly for this long before the servers are tried again:
+	// otherwise every lookup would first wait for all of them once more.
+	retryAfter = 30 * time.Second
+	// What a query keeps of its time for the fallback while it asks the servers.
+	fallbackShare = 2500 * time.Millisecond
 )
 
 // Dialer opens the outgoing connections (on a phone: bound to the cellular network).
@@ -50,6 +55,7 @@ type Resolver struct {
 	fallback netip.AddrPort
 	dialer   Dialer
 	next     atomic.Int32
+	down     atomic.Int64 // UnixNano until which the servers are not asked (none answered)
 }
 
 // New makes a resolver. fallback, if valid, is a plain DNS server used only when no DoH server can be reached
@@ -89,25 +95,47 @@ func (r *Resolver) Resolve(ctx context.Context, query []byte) (answer []byte, en
 
 	start := int(r.next.Load())
 	var errs []error
-	for k := range r.servers {
-		i := (start + k) % len(r.servers)
-		ans, err := r.ask(ctx, i, q)
-		if err != nil {
-			errs = append(errs, err)
-			continue
+	if !r.fallback.IsValid() || time.Now().UnixNano() >= r.down.Load() {
+		for k := range r.servers {
+			i := (start + k) % len(r.servers)
+			actx, cancel := r.share(ctx, len(r.servers)-k)
+			ans, err := r.ask(actx, i, q)
+			cancel()
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			r.next.Store(int32(i))
+			ans[0], ans[1] = id[0], id[1]
+			return ans, true, nil
 		}
-		r.next.Store(int32(i))
-		ans[0], ans[1] = id[0], id[1]
-		return ans, true, nil
+		r.down.Store(time.Now().Add(retryAfter).UnixNano())
 	}
 	if r.fallback.IsValid() {
-		ans, err := r.plain(ctx, query)
+		// On its own time: the servers that did not answer may have used up the caller's.
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), queryTimeout)
+		ans, err := r.plain(fctx, query)
+		cancel()
 		if err == nil {
 			return ans, false, nil
 		}
 		errs = append(errs, err)
 	}
 	return nil, false, fmt.Errorf("doh: no server answered: %w", errors.Join(errs...))
+}
+
+// share gives one of the left servers still to ask its part of the time ctx has, keeping some for the fallback: a
+// network that swallows the packets to every server must not use the whole time up before the fallback is asked.
+func (r *Resolver) share(ctx context.Context, left int) (context.Context, context.CancelFunc) {
+	per := queryTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		rest := time.Until(deadline)
+		if r.fallback.IsValid() {
+			rest -= fallbackShare
+		}
+		per = min(per, max(rest/time.Duration(left), 500*time.Millisecond))
+	}
+	return context.WithTimeout(ctx, per)
 }
 
 func (r *Resolver) ask(ctx context.Context, i int, q []byte) ([]byte, error) {

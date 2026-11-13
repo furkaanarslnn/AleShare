@@ -16,7 +16,10 @@ import (
 type releaseState struct {
 	APK      int `json:"apk"`       // the release of the APK kept in Hotspot.apk (0: none)
 	PhoneApp int `json:"phone_app"` // the newest app the phone said it has, last time it was asked
-	PhonePC  int `json:"phone_pc"`  // the newest Windows program it said it has
+	// PhoneAppName is what the phone called that release. A release that got its name after this program was
+	// built has one this program cannot work out from the number.
+	PhoneAppName string `json:"phone_app_name,omitempty"`
+	PhonePC      int    `json:"phone_pc"` // the newest Windows program it said it has
 	// Tried holds when a transfer was last tried ("bring-apk-12"…), so that one the phone turns away is not tried
 	// again every minute.
 	Tried map[string]time.Time `json:"tried,omitempty"`

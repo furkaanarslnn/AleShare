@@ -37,22 +37,23 @@ var errNoWebView = errors.New("Microsoft Edge WebView2 bulunamadı")
 
 // windowState is what the window shows; it is sent whole whenever it changes.
 type windowState struct {
-	Installed        bool     `json:"installed"`
-	Elevated         bool     `json:"elevated"`
-	Version          string   `json:"version"`          // this file's release
-	InstalledVersion string   `json:"installedVersion"` // the installed program's, "" when unknown
-	CanUpgrade       bool     `json:"canUpgrade"`       // this file is not the installed program
-	Name             string   `json:"name"`             // this computer, as the phone lists it
-	Network          string   `json:"network"`
-	Next             string   `json:"next"`
-	AutoJoin         bool     `json:"autoJoin"`
-	OnNetwork        bool     `json:"onNetwork"`
-	Tunnel           string   `json:"tunnel"`
-	PhoneApp         int          `json:"phoneApp"` // the newest app the phone had when last asked (0: not known)
+	Installed        bool         `json:"installed"`
+	Elevated         bool         `json:"elevated"`
+	Version          string       `json:"version"`          // this file's release
+	InstalledVersion string       `json:"installedVersion"` // the installed program's, "" when unknown
+	CanUpgrade       bool         `json:"canUpgrade"`       // this file is not the installed program
+	Name             string       `json:"name"`             // this computer, as the phone lists it
+	Network          string       `json:"network"`
+	Next             string       `json:"next"`
+	AutoJoin         bool         `json:"autoJoin"`
+	OnNetwork        bool         `json:"onNetwork"`
+	Tunnel           string       `json:"tunnel"`
+	PhoneApp         int          `json:"phoneApp"`     // the newest app the phone had when last asked (0: not known)
 	PhoneAppName     string       `json:"phoneAppName"` // what that release is called
-	Phone            *phoneStatus `json:"phone"`    // the phone's state now; nil when it cannot be asked
+	PhoneWaiting     bool         `json:"phoneWaiting"` // the phone has that release but still runs an older one
+	Phone            *phoneStatus `json:"phone"`        // the phone's state now; nil when it cannot be asked
 	View             connView     `json:"view"`
-	Log              []string `json:"log"`
+	Log              []string     `json:"log"`
 	Online           onlineOffer  `json:"online"` // a newer release on GitHub; its name is empty when there is none
 }
 
@@ -197,15 +198,25 @@ func (g *window) collect() windowState {
 		s.OnNetwork = s.OnNetwork || knownNetwork(set, ssid)
 	}
 	s.Tunnel = serviceState()
-	s.PhoneApp = loadReleases().PhoneApp
-	if s.PhoneApp > 0 {
-		s.PhoneAppName = release.Name(s.PhoneApp)
+	if rel := loadReleases(); rel.PhoneApp > 0 {
+		s.PhoneApp, s.PhoneAppName = rel.PhoneApp, rel.PhoneAppName
+		if s.PhoneAppName == "" {
+			s.PhoneAppName = release.Name(s.PhoneApp)
+		}
 	}
 	if rel := loadOnline().offer(installedCode(set)); rel != nil && !g.upgrade {
 		s.Online = onlineOffer{Name: rel.Name, Size: rel.PC.Size}
 	}
 	if s.OnNetwork {
 		s.Phone, _ = fetchPhone(set, s.Tunnel == serviceRunning)
+	}
+	if s.Phone != nil {
+		// The release the phone runs: its number when the app says it, else worked out from the name.
+		running := s.Phone.Code
+		if running == 0 {
+			running = versionCode(s.Phone.Version)
+		}
+		s.PhoneWaiting = running > 0 && s.PhoneApp > running
 	}
 	s.View = describe(set, s.OnNetwork, s.Tunnel, loadHealth())
 	s.Log = lastLog(6)
@@ -256,9 +267,13 @@ func (g *window) answer(value string, ok bool) {
 // windowUI is the setup shown in the window.
 type windowUI struct{ g *window }
 
-func (u windowUI) Step(id stepID, detail string) { u.g.emit(event{Type: "step", Step: id, Detail: detail}) }
+func (u windowUI) Step(id stepID, detail string) {
+	u.g.emit(event{Type: "step", Step: id, Detail: detail})
+}
 
-func (u windowUI) Done(id stepID, detail string) { u.g.emit(event{Type: "done", Step: id, Detail: detail}) }
+func (u windowUI) Done(id stepID, detail string) {
+	u.g.emit(event{Type: "done", Step: id, Detail: detail})
+}
 
 func (u windowUI) Password(ssid string, retry bool) (string, bool) {
 	u.g.emit(event{Type: "password", Step: stepWifi, SSID: ssid, Retry: retry})

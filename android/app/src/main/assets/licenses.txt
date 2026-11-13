@@ -12,11 +12,13 @@ dağıtılır, içlerindeki açık kaynak bileşenlerin lisansları da aşağıd
 github.com/google/btree v1.1.2
 AndroidX ve Jetpack Compose kitaplıkları (The Android Open Source Project)
 Kotlin standart kitaplığı (JetBrains s.r.o. and Kotlin Programming Language contributors)
-kotlinx.coroutines (JetBrains s.r.o.)
+kotlinx.coroutines ve kotlinx.serialization (JetBrains s.r.o.)
+JetBrains Java Annotations (JetBrains s.r.o.)
 ZXing core (ZXing authors)
-Firebase Components ve Firebase Encoders (Google LLC)
+Firebase Components, Firebase Encoders ve Firebase Annotations (Google LLC)
 Google DataTransport (Google LLC)
-Dagger (The Dagger Authors)
+Guava ListenableFuture (The Guava Authors)
+JSpecify (The JSpecify Authors)
 javax.inject (The JSR-330 Expert Group)
 Error Prone
 Guava JDK5
@@ -29,6 +31,7 @@ JSR 250
 Kotlin coroutines
 gsfclient
 kotlinx_atomicfu
+J2ObjC
 ================================================================================
 
                                  Apache License

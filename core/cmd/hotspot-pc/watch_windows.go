@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -40,6 +41,51 @@ const (
 	watchDescription = "Telefonun ağı görününce AleShare bağlantısını açar, ağdan çıkınca kapatır."
 )
 
+// setupMutex exists while a setup runs (a variable for the tests, which may not make global objects).
+var setupMutex = `Global\HotspotSetup`
+
+// holdSetup says, until resume is called or this process ends, that a setup is under way: the watcher service of
+// an installation that is being paired anew then leaves the tunnel alone (see cmdReconcile). A mark that goes
+// with the process cannot be left behind by a setup whose window was closed half-way.
+func holdSetup() (resume func()) {
+	name := windows.StringToUTF16Ptr(setupMutex)
+	var h windows.Handle
+	// As the administrators', which only a process with administrator rights can make: see setupRunning.
+	if sd, err := windows.SecurityDescriptorFromString("O:BAD:(A;;GA;;;SY)(A;;GA;;;BA)"); err == nil {
+		sa := windows.SecurityAttributes{SecurityDescriptor: sd}
+		sa.Length = uint32(unsafe.Sizeof(sa))
+		h, _ = windows.CreateMutex(&sa, false, name) // ERROR_ALREADY_EXISTS is fine
+	}
+	if h == 0 {
+		h, _ = windows.CreateMutex(nil, false, name) // without the rights (the tests): as its maker's
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			if h != 0 {
+				windows.CloseHandle(h)
+			}
+		})
+	}
+}
+
+// setupRunning reports whether a setup is under way in some process. Only a mark that belongs to the
+// administrators, SYSTEM or this process's own account counts: anybody can make an object of that name, and that
+// must not be a way to stop the watcher.
+func setupRunning() bool {
+	h, err := windows.OpenMutex(windows.SYNCHRONIZE|windows.READ_CONTROL, false, windows.StringToUTF16Ptr(setupMutex))
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(h)
+	sd, err := windows.GetSecurityInfo(h, windows.SE_KERNEL_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return false
+	}
+	owner, _, err := sd.Owner()
+	return err == nil && trustedOwner(owner)
+}
+
 // inService says this process is the watcher service (an upgrade it runs itself is taken up by a restart).
 var inService bool
 
@@ -61,6 +107,7 @@ func (watcher) Execute(_ []string, requests <-chan svc.ChangeRequest, status cha
 	var (
 		done    chan struct{}
 		runEnds time.Time
+		changed bool // the Wi-Fi changed while a run was under way, which may have looked before the change
 	)
 	for {
 		now := time.Now()
@@ -87,6 +134,9 @@ func (watcher) Execute(_ []string, requests <-chan svc.ChangeRequest, status cha
 			}
 		case <-done:
 			done, next = nil, time.Now().Add(watchEvery)
+			if changed {
+				changed, next = false, time.Now().Add(wlanSettle)
+			}
 			// A newer release replaced the program (taken from the phone by this very run, or installed by hand):
 			// stopping with an error makes Windows start the service again, from the new file.
 			if t := modTime(installedExe()); !t.IsZero() && !t.Equal(started) {
@@ -96,7 +146,9 @@ func (watcher) Execute(_ []string, requests <-chan svc.ChangeRequest, status cha
 		case <-look.C:
 			if s := wlanStates(); s != wifi {
 				wifi = s
-				if soon := time.Now().Add(wlanSettle); soon.Before(next) {
+				if done != nil {
+					changed = true // the run's end would push the next look a minute away
+				} else if soon := time.Now().Add(wlanSettle); soon.Before(next) {
 					next = soon
 				}
 			}
@@ -111,7 +163,7 @@ func (watcher) Execute(_ []string, requests <-chan svc.ChangeRequest, status cha
 // lockReconcile keeps two runs of reconcile from overlapping (the service, and someone running it by hand); it
 // returns the unlock. Without the lock (another account made it, access denied) the run goes on regardless.
 func lockReconcile() func() {
-	runtime.LockOSThread() // a mutex is released by the thread that holds it
+	runtime.LockOSThread()                                                            // a mutex is released by the thread that holds it
 	h, _ := windows.CreateMutex(nil, false, windows.StringToUTF16Ptr(reconcileMutex)) // ERROR_ALREADY_EXISTS is fine
 	if h == 0 {
 		runtime.UnlockOSThread()

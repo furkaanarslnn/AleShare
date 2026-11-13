@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,9 +16,19 @@ import (
 )
 
 // The window shows how the phone is doing and changes its switches (wgcore: GET and POST /phone). It needs the
-// phone's token, which only the tunnel's keys can read from the phone's sealed answer; the scheduled task has them
+// phone's token, which only the tunnel's keys can read from the phone's sealed answer; the watcher service has them
 // and leaves the token here for the window, which runs without administrator rights. It lets one do no more than
 // the window shows: read the phone's state, switch its options, hand it a signed release.
+
+// bare is a failed request's error without the address that was asked: the address carries the phone's token, which
+// belongs in no log and on no screen.
+func bare(err error) error {
+	var u *url.Error
+	if errors.As(err, &u) {
+		return u.Err
+	}
+	return err
+}
 
 func phoneAccessPath() string { return filepath.Join(dataDir(), "phone.json") }
 
@@ -52,8 +63,8 @@ type phoneDevice struct {
 	Today     int64  `json:"today"`
 	LimitMB   int64  `json:"limit_mb"`
 	SpeedKbps int64  `json:"speed_kbps"`
-	Quiet     string `json:"quiet"` // "23:00–07:00", or empty
-	Guest     string `json:"guest"` // "Misafir · 45 dk kaldı", or empty
+	Quiet     string `json:"quiet"`  // "23:00–07:00", or empty
+	Guest     string `json:"guest"`  // "Misafir · 45 dk kaldı", or empty
 	Paused    string `json:"paused"` // "none", "manual", "limit" or "quiet"
 }
 
@@ -80,6 +91,7 @@ type phoneSpeed struct {
 // phoneStatus is the phone's state (see Controls.status in the app).
 type phoneStatus struct {
 	Version   string        `json:"version"`
+	Code      int           `json:"code"` // the app's release number (apps from 1.2.2 say it)
 	Battery   int           `json:"battery"`
 	Charging  bool          `json:"charging"`
 	Network   string        `json:"network"`
@@ -120,7 +132,7 @@ func fetchPhone(set settings, viaTunnel bool) (*phoneStatus, error) {
 	}
 	resp, err := phoneClient.Get(phoneURL(set, viaTunnel, a.Token))
 	if err != nil {
-		return nil, err
+		return nil, bare(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -155,7 +167,7 @@ func measureWifi(set settings, viaTunnel bool) (down, up int64, err error) {
 
 	resp, err := client.Get(url + "&bytes=" + strconv.Itoa(wifiTestBytes))
 	if err != nil {
-		return 0, 0, fmt.Errorf("telefona ulaşılamadı: %w", err)
+		return 0, 0, fmt.Errorf("telefona ulaşılamadı: %w", bare(err))
 	}
 	start := time.Now()
 	n, _ := io.Copy(io.Discard, &deadlineReader{r: resp.Body, until: start.Add(wifiTestTime)})
@@ -169,7 +181,7 @@ func measureWifi(set settings, viaTunnel bool) (down, up int64, err error) {
 	body := &deadlineReader{r: zeroReader{}, until: time.Now().Add(wifiTestTime), limit: wifiTestBytes}
 	resp, err = client.Post(url, "application/octet-stream", body)
 	if err != nil {
-		return down, 0, fmt.Errorf("telefona ulaşılamadı: %w", err)
+		return down, 0, fmt.Errorf("telefona ulaşılamadı: %w", bare(err))
 	}
 	var got struct{ Bytes, Ms int64 }
 	err = json.NewDecoder(io.LimitReader(resp.Body, 1<<10)).Decode(&got)
@@ -219,7 +231,7 @@ func sendPhone(set settings, viaTunnel bool, change map[string]any) error {
 	}
 	resp, err := phoneClient.Post(phoneURL(set, viaTunnel, a.Token), "application/json", bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("telefona ulaşılamadı: %w", err)
+		return fmt.Errorf("telefona ulaşılamadı: %w", bare(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

@@ -220,7 +220,7 @@ func Listen(addr string, reg Registrar, ln Listener, window time.Duration) (*Ser
 	mux.HandleFunc("/v1/hello", s.hello)
 	mux.HandleFunc("/v1/reveal", s.reveal)
 	mux.HandleFunc("/v1/qr", s.qr)
-	s.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	s.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
 	s.timer = time.AfterFunc(window, s.Close)
 	go s.srv.Serve(l)
 	return s, nil
@@ -334,6 +334,17 @@ func (s *Server) reveal(w http.ResponseWriter, r *http.Request) {
 		if !s.ln.Approve(sess.name, sas) {
 			sess.result <- outcome{denied: true}
 			return
+		}
+		// The user may have answered after the window closed or the computer gave up: that computer has thrown its
+		// key away by now, and enrolling it would leave a device in the list that nobody holds the key of.
+		select {
+		case <-s.done:
+			sess.result <- outcome{denied: true}
+			return
+		case <-r.Context().Done():
+			sess.result <- outcome{denied: true}
+			return
+		default:
 		}
 		g, err := s.reg.Enroll(sess.name, req.PublicKey)
 		sess.result <- outcome{grant: g, err: err}

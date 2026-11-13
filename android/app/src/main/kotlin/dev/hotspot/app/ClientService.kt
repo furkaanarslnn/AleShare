@@ -71,6 +71,14 @@ class ClientService : VpnService() {
   private var asking = false
   private var askedAt = 0L
 
+  // What waits its turn on the main thread, each by name, so that each can be taken back on its own. (Taking
+  // everything back at once, as closing the tunnel did, also threw away the system's answers about the network,
+  // which arrive on the same thread, and the end of a question to the phone or of a download: the device then
+  // never asked the phone again, or never looked for its network again.)
+  private val watcher = Runnable { watch() }
+  private val retry = Runnable { network?.let(::openTunnel) }
+  private val search = Runnable { requestNetwork() }
+
   /**
    * Started by the app, by Android again after it had to end the process (no intent), by the boot receiver, or
    * by Android itself when this app is the always-on VPN. All of them mean the same: connect to the saved phone.
@@ -79,7 +87,7 @@ class ClientService : VpnService() {
     if (intent?.action == ACTION_STOP) {
       setWanted(this, false)
       shutDown()
-      stopSelf()
+      stopSelf(startId) // this stop only: a start that was asked for after it goes on
       return START_NOT_STICKY
     }
     if (intent?.action == ACTION_DOWNLOAD_UPDATE) {
@@ -160,13 +168,22 @@ class ClientService : VpnService() {
    * once (for each name: a new name of the phone's network asks again).
    */
   private fun requestNetwork() {
+    if (Build.VERSION.SDK_INT < 29) return
+    handler.removeCallbacks(search)
     val t = target ?: return
     // Android looks for a network once per request and does not come back to it when the network is gone, so a
     // fresh request is made whenever the old one ran out (see [onSearchEnded]) or the network was lost.
     callback?.let { runCatching { connectivity.unregisterNetworkCallback(it) } }
     if (lastPublished != ClientPhase.Searching) publish(ClientPhase.Searching)
     ClientState.update { it.copy(ssid = t.ssid, error = null) }
-    val specifier = WifiNetworkSpecifier.Builder().setSsid(t.ssid).setWpa2Passphrase(t.passphrase).build()
+    val specifier = try {
+      WifiNetworkSpecifier.Builder().setSsid(t.ssid).setWpa2Passphrase(t.passphrase).build()
+    } catch (e: IllegalArgumentException) {
+      // A name or password Android does not take (a link put together by hand). The connection ends here: left
+      // wanted, every start of the app would run into the same refusal.
+      fail("Kayıtlı bağlantının Wi-Fi adı ya da parolası geçersiz. Paylaşan telefondan yeni bir kod al.")
+      return
+    }
     val request = NetworkRequest.Builder()
       .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
       // The phone's network has no internet of its own: only the tunnel gives it one.
@@ -189,7 +206,14 @@ class ClientService : VpnService() {
     // phone is gone must get back to its usual Wi-Fi.
     requestTimeout = searchTimeout(first = searches++ == 0, patientLeft = patientSearches)
     if (patientSearches > 0) patientSearches--
-    connectivity.requestNetwork(request, cb, handler, requestTimeout.toInt())
+    try {
+      connectivity.requestNetwork(request, cb, handler, requestTimeout.toInt())
+    } catch (e: RuntimeException) {
+      // Android refuses now and then (too many requests at once, say): look again after a pause.
+      Log.w(TAG, "the request for the phone's network was refused", e)
+      callback = null
+      handler.postDelayed(search, LOOK_AGAIN_MILLIS)
+    }
   }
 
   /**
@@ -210,7 +234,7 @@ class ClientService : VpnService() {
       searches < SEARCHES_BEFORE_SLOWER -> LOOK_AGAIN_MILLIS
       else -> LOOK_AGAIN_SLOW_MILLIS
     }
-    handler.postDelayed({ requestNetwork() }, pause)
+    handler.postDelayed(search, pause)
   }
 
   /** Until then, after losing the network while a change was announced, only the new network is looked for. */
@@ -247,7 +271,7 @@ class ClientService : VpnService() {
       target = next
       nextFirstUntil = SystemClock.elapsedRealtime() + NEXT_FIRST_MILLIS
     }
-    handler.postDelayed({ requestNetwork() }, if (next != null) LOOK_AGAIN_SWITCH_MILLIS else REJOIN_DELAY_MILLIS)
+    handler.postDelayed(search, if (next != null) LOOK_AGAIN_SWITCH_MILLIS else REJOIN_DELAY_MILLIS)
   }
 
   private fun reload() {
@@ -376,7 +400,16 @@ class ClientService : VpnService() {
         } finally {
           conn.disconnect()
         }
-        File(dir, "hotspot.apk").also { part.renameTo(it) }
+        val apk = File(dir, "hotspot.apk")
+        apk.delete()
+        if (!part.renameTo(apk)) error("dosya kaydedilemedi")
+        // Only this app, signed with this app's key, in the release the phone named, goes on to Android's
+        // installer: the file came over the Wi-Fi network in the clear, and anything on it could have answered.
+        if (Updates.check(this@ClientService, apk, claimed = update.code) == null) {
+          apk.delete()
+          error("dosya AleShare'in imzasını taşımıyor")
+        }
+        apk
       }
       handler.post {
         ClientState.update { s ->
@@ -430,7 +463,7 @@ class ClientService : VpnService() {
     lastRx = 0
     lastRxAt = now
     txAtRx = 0
-    handler.postDelayed(::watch, WATCH_MILLIS)
+    handler.postDelayed(watcher, WATCH_MILLIS)
   }
 
   /** Once in a while: has the phone answered, and is it still there? */
@@ -458,7 +491,7 @@ class ClientService : VpnService() {
       // Give the normal internet back instead of leaving the tunnel to swallow everything, and try again later.
       closeTunnel()
       publish(ClientPhase.Unreachable)
-      handler.postDelayed({ network?.let(::openTunnel) }, RETRY_MILLIS)
+      handler.postDelayed(retry, RETRY_MILLIS)
       return
     }
     if (age >= 0) {
@@ -479,7 +512,7 @@ class ClientService : VpnService() {
       val j = join
       if (wifi != null && j != null && !asking && now - askedAt >= ASK_EVERY_MILLIS) askWifi(wifi, j.config)
     }
-    handler.postDelayed(::watch, WATCH_MILLIS)
+    handler.postDelayed(watcher, WATCH_MILLIS)
   }
 
   private var lastPublished: ClientPhase? = null
@@ -508,7 +541,8 @@ class ClientService : VpnService() {
   }
 
   private fun closeTunnel() {
-    handler.removeCallbacksAndMessages(null)
+    handler.removeCallbacks(watcher)
+    handler.removeCallbacks(retry)
     tunnel?.stop()
     tunnel = null
     noteRx = null
@@ -527,6 +561,8 @@ class ClientService : VpnService() {
 
   private fun shutDown() {
     closeTunnel()
+    handler.removeCallbacksAndMessages(null) // everything: nothing of this connection is wanted any more
+    asking = false // a question under way was just told not to report back
     if (loopbackApp != null) {
       loopbackApp = null
       CoreHolder.peek()?.let {
