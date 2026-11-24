@@ -368,4 +368,17 @@ class LogicTest {
     assertFalse(limitMark("manual"))
     assertFalse(limitMark(null))
   }
+
+  // A device that slept is not told the phone is gone the moment it wakes: the handshake is old because the device
+  // slept, not because the phone left. Once awake for a while, an old handshake counts again.
+  @Test
+  fun waking_doesNotCountAsThePhoneGone() {
+    val now = 10_000_000L
+    assertFalse("just woke, handshake 10 min old", phoneSilent(600, now, 0, now - 2_000, 0, now - 2_000))
+    assertTrue("awake for a minute, still no handshake", phoneSilent(600, now, 0, now - 60_000, 0, now - 60_000))
+    assertTrue("never woke from sleep here, handshake too old", phoneSilent(600, now, 0, 0, 0, now))
+    assertFalse("a fresh handshake, nothing unanswered", phoneSilent(30, now, 0, 0, 0, now - 600_000))
+    assertTrue("much sent, nothing back for long", phoneSilent(30, now, 0, 0, 64 * 1024, now - 30_000))
+    assertFalse("no first handshake yet, opened a moment ago", phoneSilent(-1, now, now - 5_000, 0, 0, now))
+  }
 }

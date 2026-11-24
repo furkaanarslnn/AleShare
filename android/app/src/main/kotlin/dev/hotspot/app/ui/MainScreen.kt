@@ -613,6 +613,17 @@ fun MainScreen() {
           }
 
           Tab.Connect -> {
+            // The connection runs in the background as a VPN: Android's battery limits may cut it while the screen
+            // is off, as they would sharing.
+            Reveal(savedJoin != null && !ignoringBattery) {
+              Banner(
+                tone = Tone.Warning,
+                icon = AppIcons.Alert,
+                text = "Ekran kapalıyken Android bağlantıyı kesebilir.",
+                actionLabel = "Düzelt",
+                onAction = { requestIgnoreBattery(context) },
+              )
+            }
             OnlineUpdateBanner(alreadyHere = null)
             ClientPanels(
               saved = savedJoin,

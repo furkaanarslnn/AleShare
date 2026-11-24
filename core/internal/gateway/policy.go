@@ -65,16 +65,46 @@ func (g *Gateway) paused(client netip.Addr) bool {
 
 // flowSet knows the flows under way per client, to end them when the client is paused.
 type flowSet struct {
-	mu sync.Mutex
-	m  map[netip.Addr]map[*func()]struct{}
-	n  int // flows of all clients
+	mu   sync.Mutex
+	m    map[netip.Addr]map[*func()]uint64 // each flow's stop, and when it began (a count)
+	n    int                               // flows of all clients
+	next uint64
 }
 
-// full reports whether client, or all the clients together, hold as many flows as they may.
-func (f *flowSet) full(client netip.Addr) bool {
+// makeRoom ends the oldest flow of client when it holds as many as it may, or the oldest flow of the client that
+// holds the most when all of them together do; a new flow of client then fits. The flow is taken out of the set
+// at once, so that the next new flow does not pick it again while it is still closing.
+func (f *flowSet) makeRoom(client netip.Addr) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.m[client]) >= maxClientFlows || f.n >= maxFlows
+	from := netip.Addr{}
+	switch {
+	case len(f.m[client]) >= maxClientFlows:
+		from = client
+	case f.n >= maxFlows:
+		for c, flows := range f.m {
+			if !from.IsValid() || len(flows) > len(f.m[from]) {
+				from = c
+			}
+		}
+	}
+	var stop func()
+	if from.IsValid() {
+		var oldest *func()
+		for key, began := range f.m[from] {
+			if oldest == nil || began < f.m[from][oldest] {
+				oldest = key
+			}
+		}
+		if oldest != nil {
+			stop = *oldest
+			delete(f.m[from], oldest)
+			f.n--
+		}
+	}
+	f.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
 }
 
 // add registers a flow of client, ended by stop; the returned function unregisters it.
@@ -82,13 +112,14 @@ func (f *flowSet) add(client netip.Addr, stop func()) (remove func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.m == nil {
-		f.m = map[netip.Addr]map[*func()]struct{}{}
+		f.m = map[netip.Addr]map[*func()]uint64{}
 	}
 	if f.m[client] == nil {
-		f.m[client] = map[*func()]struct{}{}
+		f.m[client] = map[*func()]uint64{}
 	}
 	key := &stop
-	f.m[client][key] = struct{}{}
+	f.next++
+	f.m[client][key] = f.next
 	f.n++
 	return func() {
 		f.mu.Lock()

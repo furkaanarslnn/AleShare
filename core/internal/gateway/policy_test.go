@@ -217,3 +217,36 @@ func TestPriorityRemembersTheLinkThroughAQuietWhile(t *testing.T) {
 		t.Fatalf("big transfers get %.0f bytes a second during the call", got)
 	}
 }
+
+// A device at its limit loses its oldest flow to a new one, never a flow of another device; when all of them
+// together are at theirs, the one that holds the most gives way.
+func TestFlowSetMakesRoomFromTheOldest(t *testing.T) {
+	var f flowSet
+	a, b := netip.MustParseAddr("10.8.0.2"), netip.MustParseAddr("10.8.0.3")
+	var ended []int
+	for i := 0; i < maxClientFlows; i++ {
+		i := i
+		f.add(a, func() { ended = append(ended, i) })
+	}
+	f.add(b, func() { ended = append(ended, -1) })
+	f.makeRoom(b)
+	if len(ended) != 0 {
+		t.Fatalf("room was made for a device below its limit: %v", ended)
+	}
+	f.makeRoom(a)
+	if len(ended) != 1 || ended[0] != 0 {
+		t.Fatalf("ended %v, want the oldest flow of the full device", ended)
+	}
+	f.makeRoom(a) // below its limit now: nothing more goes
+	if len(ended) != 1 {
+		t.Fatalf("ended %v after the room was made", ended)
+	}
+	f.add(a, func() { ended = append(ended, maxClientFlows) }) // full again
+	f.makeRoom(a)                                              // the first one taken is out of the set: now the second oldest goes
+	if len(ended) != 2 || ended[1] != 1 {
+		t.Fatalf("ended %v, want the second oldest next", ended)
+	}
+	if f.n != maxClientFlows {
+		t.Fatalf("%d flows counted", f.n)
+	}
+}

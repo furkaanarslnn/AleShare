@@ -69,6 +69,10 @@ class ClientService : VpnService() {
   private var lastRxAt = 0L
   private var txAtRx = 0L
 
+  /** When [watch] last looked, and when the device last woke from sleep (elapsed time, sleep included). */
+  private var lastWatchAt = 0L
+  private var wokeAt = 0L
+
   // Asking the phone about its Wi-Fi network blocks for up to a few seconds, so it runs off the main thread.
   private val asker = Executors.newSingleThreadExecutor()
   private var asking = false
@@ -79,7 +83,9 @@ class ClientService : VpnService() {
   // which arrive on the same thread, and the end of a question to the phone or of a download: the device then
   // never asked the phone again, or never looked for its network again.)
   private val watcher = Runnable { watch() }
-  private val retry = Runnable { network?.let(::openTunnel) }
+
+  /** The tunnel is opened again after the phone fell silent; on an alarm, so that it happens while the device sleeps too. */
+  private val retryAlarm = AlarmManager.OnAlarmListener { network?.let(::openTunnel) }
 
   /**
    * The next search for the phone's network waits on an alarm, not on the main thread's clock: that clock stops
@@ -512,6 +518,8 @@ class ClientService : VpnService() {
     lastRx = 0
     lastRxAt = now
     txAtRx = 0
+    lastWatchAt = 0L
+    wokeAt = 0L
     handler.postDelayed(watcher, WATCH_MILLIS)
   }
 
@@ -522,6 +530,18 @@ class ClientService : VpnService() {
     val rx = t.rxBytes()
     val tx = t.txBytes()
     val age = t.handshakeAge()
+    if (lastWatchAt != 0L && now - lastWatchAt > SLEPT_MILLIS) {
+      // The device slept in between: nothing ran, nothing was sent, the tunnel did not renew its keys. Time spent
+      // asleep says nothing about the phone, yet the rules below counted it: a tablet that slept a few minutes took
+      // the phone for gone the moment it woke, closed the tunnel and stayed without internet for a while. The
+      // silence is counted again from the waking.
+      Log.i(TAG, "woke after ${(now - lastWatchAt) / 1000} s asleep")
+      wokeAt = now
+      lastRxAt = now
+      txAtRx = tx
+      openedAt = maxOf(openedAt, now - WATCH_MILLIS)
+    }
+    lastWatchAt = now
     if (rx != lastRx) {
       lastRx = rx
       lastRxAt = now
@@ -531,16 +551,13 @@ class ClientService : VpnService() {
     // minutes (a dead phone does not answer that), and one that is being used gets answers to what it sends, so
     // a lot going out with nothing coming back for a while is a dead phone too. Mere quiet is not: the phone
     // does not talk when there is nothing to say.
-    val silent = when {
-      age < 0 -> now - openedAt > CONNECT_TIMEOUT_MILLIS
-      age > STALE_HANDSHAKE_SECONDS -> true
-      else -> tx - txAtRx > UNANSWERED_BYTES && now - lastRxAt > UNANSWERED_MILLIS
-    }
+    val silent = phoneSilent(age, now, openedAt, wokeAt, tx - txAtRx, lastRxAt)
     if (silent) {
+      Log.i(TAG, "the phone does not answer (handshake ${age}s ago, ${tx - txAtRx} bytes unanswered): closing the tunnel")
       // Give the normal internet back instead of leaving the tunnel to swallow everything, and try again later.
       closeTunnel()
       publish(ClientPhase.Unreachable)
-      handler.postDelayed(retry, RETRY_MILLIS)
+      alarms.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, now + RETRY_MILLIS, "AleShare:retry", retryAlarm, handler)
       return
     }
     if (age >= 0) {
@@ -591,7 +608,7 @@ class ClientService : VpnService() {
 
   private fun closeTunnel() {
     handler.removeCallbacks(watcher)
-    handler.removeCallbacks(retry)
+    alarms.cancel(retryAlarm)
     tunnel?.stop()
     tunnel = null
     noteRx = null
@@ -707,11 +724,15 @@ class ClientService : VpnService() {
     private const val LOOK_AGAIN_SWITCH_MILLIS = 5_000L
     private const val NEXT_FIRST_MILLIS = 120_000L
     private const val WATCH_MILLIS = 2_000L
-    private const val CONNECT_TIMEOUT_MILLIS = 20_000L
-    private const val STALE_HANDSHAKE_SECONDS = 200L
-    private const val UNANSWERED_BYTES = 16 * 1024L
-    private const val UNANSWERED_MILLIS = 20_000L
+    const val CONNECT_TIMEOUT_MILLIS = 20_000L
+    const val STALE_HANDSHAKE_SECONDS = 200L
+    const val UNANSWERED_BYTES = 16 * 1024L
+    const val UNANSWERED_MILLIS = 20_000L
     private const val RETRY_MILLIS = 45_000L
+    /** A look comes every [WATCH_MILLIS] while the device is awake; a longer gap means it slept. */
+    private const val SLEPT_MILLIS = 10_000L
+    /** After waking, how long the tunnel has to shake hands again before an old handshake counts against the phone. */
+    const val WAKE_GRACE_MILLIS = 30_000L
     /** How often a connected device asks whether the phone's network is about to change (it waits at most 90 s). */
     private const val ASK_EVERY_MILLIS = 30_000L
     /** How long before this device brings the same release to the phone again, if the phone did not take it. */
@@ -787,3 +808,17 @@ private fun String.cidrs(): List<Pair<String, Int>> =
 /** How long one search for the phone's network waits: long enough for the system's dialog when it may come. */
 internal fun searchTimeout(first: Boolean, patientLeft: Int): Long =
   if (first || patientLeft > 0) ClientService.FIRST_SEARCH_TIMEOUT_MILLIS else ClientService.SEARCH_TIMEOUT_MILLIS
+
+/**
+ * Whether the phone counts as gone, from what the tunnel shows at [now] (elapsed time): [handshakeAge] in seconds
+ * (-1 before the first), when the tunnel was opened, when the device last woke from sleep, how much went out
+ * since something last came in and when that was.
+ */
+internal fun phoneSilent(handshakeAge: Long, now: Long, openedAt: Long, wokeAt: Long, unanswered: Long, lastRxAt: Long): Boolean =
+  when {
+    handshakeAge < 0 -> now - openedAt > ClientService.CONNECT_TIMEOUT_MILLIS
+    // The handshake's age is wall-clock time, sleep included: after waking the tunnel first gets the time to shake
+    // hands again.
+    handshakeAge > ClientService.STALE_HANDSHAKE_SECONDS -> now - wokeAt > ClientService.WAKE_GRACE_MILLIS
+    else -> unanswered > ClientService.UNANSWERED_BYTES && now - lastRxAt > ClientService.UNANSWERED_MILLIS
+  }

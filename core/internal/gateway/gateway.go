@@ -43,13 +43,17 @@ const (
 
 	maxInFlightSYN = 2048
 	// Each flow costs an outgoing socket, buffers and goroutines. A device, or a program gone wild on one, must not
-	// be able to open them without end: the app would run out of sockets for everybody.
+	// be able to open them without end: the app would run out of sockets for everybody. When a device is at its
+	// limit (or all of them together are), its oldest flow makes room for the new one, as a router's table does;
+	// no flow is ended only because it was quiet for a while (see flowSet.makeRoom).
 	maxClientFlows  = 1024
 	maxFlows        = 6000
 	dialTimeout     = 10 * time.Second
 	tcpDrainTimeout = 2 * time.Minute
-	udpIdleTimeout  = time.Minute
-	dnsIdleTimeout  = 10 * time.Second
+	// A UDP "connection" has no end of its own: like a home router, the phone forgets one after it carried
+	// nothing either way for this long. A sleeping device's calls and games keep theirs alive by themselves.
+	udpIdleTimeout = 5 * time.Minute
+	dnsIdleTimeout = 10 * time.Second
 
 	tcpBufSize = 16 << 10
 	udpBufSize = 8 << 10
@@ -67,10 +71,17 @@ const (
 	defaultCoalesce = 0
 	coalesceEnough  = 16
 
-	defaultKeepAliveIdle     = 5 * time.Minute
-	defaultKeepAliveInterval = 30 * time.Second
-	defaultKeepAliveCount    = 4
-	defaultUserTimeout       = 2 * time.Minute
+	// A device's connections last as on any Wi-Fi: until the device or the site ends them, or sharing stops. A
+	// tablet lying idle sleeps, and its tunnel answers late or not at all, sometimes for hours; it still wants its
+	// connections (the ones that bring messages and notifications). So a quiet flow is probed only after two
+	// hours and given up after nine more unanswered probes, as a computer's own TCP does by default; data left
+	// unacknowledged is given as long. (Five minutes and four probes, as it was, cut every quiet connection of a
+	// device asleep for seven minutes.) A device that is really gone loses its flows when it is removed, when
+	// sharing stops, or one by one when its address needs the room (see flowSet.makeRoom).
+	defaultKeepAliveIdle     = 2 * time.Hour
+	defaultKeepAliveInterval = 75 * time.Second
+	defaultKeepAliveCount    = 9
+	defaultUserTimeout       = 2 * time.Hour
 )
 
 var (
@@ -134,13 +145,13 @@ type Options struct {
 	AllowLoopback bool
 	// KeepAlive* probe the client side of every TCP flow, so that the flows of
 	// a client that vanished (switched off, out of range) are closed instead of
-	// living forever. Defaults: 5 minutes idle, then 4 probes 30 seconds apart.
+	// living forever. Defaults: 2 hours idle, then 9 probes 75 seconds apart.
 	KeepAliveIdle     time.Duration
 	KeepAliveInterval time.Duration
 	KeepAliveCount    int
 	// UserTimeout ends a TCP flow whose data stays unacknowledged for this long:
 	// the keepalive does not run while data is in flight, so a client that vanishes
-	// mid-download is caught by this instead. Default 2 minutes.
+	// mid-download is caught by this instead. Default 2 hours.
 	UserTimeout time.Duration
 }
 
@@ -384,7 +395,7 @@ func (g *Gateway) handleTCP(r *tcp.ForwarderRequest) {
 	}
 	client, _ := addrPort(id.RemoteAddress, id.RemotePort)
 	target, allowed := g.resolve(dst)
-	if !allowed || g.paused(client.Addr()) || g.flows.full(client.Addr()) {
+	if !allowed || g.paused(client.Addr()) {
 		r.Complete(true)
 		return
 	}
@@ -479,6 +490,7 @@ func (g *Gateway) relayTCP(in, out net.Conn, client netip.Addr) {
 	}
 	closeBoth, breakBoth := func() { end(false) }, func() { end(true) }
 	defer closeBoth()
+	g.flows.makeRoom(client)
 	defer g.flows.add(client, breakBoth)()
 	if g.paused(client) {
 		return // paused while the connection was being made: the cut that came with the pause did not see it yet
@@ -566,7 +578,7 @@ func (g *Gateway) handleUDP(r *udp.ForwarderRequest) {
 	service := g.service(dst)
 	client, _ := addrPort(id.RemoteAddress, id.RemotePort)
 	target, allowed := g.resolve(dst)
-	if (!allowed || g.paused(client.Addr()) || g.flows.full(client.Addr())) && !local && service == nil {
+	if (!allowed || g.paused(client.Addr())) && !local && service == nil {
 		return
 	}
 	var wq waiter.Queue
@@ -782,6 +794,7 @@ func (g *Gateway) relayUDP(in net.Conn, target netip.AddrPort, client netip.Addr
 		return
 	}
 	defer out.Close()
+	g.flows.makeRoom(client)
 	defer g.flows.add(client, func() { in.Close(); out.Close() })()
 	if g.paused(client) {
 		return // paused while the socket was being opened
