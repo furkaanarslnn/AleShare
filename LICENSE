@@ -1,0 +1,20 @@
+Copyright (c) 2026 furkanyela. All rights reserved.
+
+1. The programs. You may download the programs published on this repository's
+   Releases page (the Android app and the Windows program), install them on your
+   own devices and use them, free of charge. You may not sell them, redistribute
+   them or offer them for download elsewhere.
+
+2. The source code. This repository is published so that its source code can be
+   read. No license is granted to copy, modify, merge, publish, distribute,
+   sublicense or sell the source code or any part of it, or to build products
+   from it, without the prior written permission of the copyright holder.
+
+3. Third-party components used by this software (for example wireguard-go,
+   gVisor, the golang.org/x packages, go-qrcode, go-webview2, AndroidX and
+   Jetpack Compose) remain under their own licenses.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM THE SOFTWARE OR ITS USE.

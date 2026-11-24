@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The notifications' icon in the status bar: the name, Ale, as a white mask. Written by core/cmd/hotspot-pc/winres/icon_gen.go: change the drawing there. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <group
+        android:scaleX="0.25"
+        android:scaleY="0.25"
+        android:translateX="-0.81"
+        android:translateY="5.6">
+        <path
+            android:fillColor="#00000000"
+            android:pathData="M10 48L20.18 14.83A4 4 0 0 1 27.82 14.83L38 48M56 12L56 48M62.43 5.34A10 10 0 0 1 62.43 20.66M49.57 5.34A10 10 0 0 0 49.57 20.66M70 37L92 37A11 11 0 1 0 89.43 44.07"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:strokeWidth="5.6" />
+    </group>
+</vector>

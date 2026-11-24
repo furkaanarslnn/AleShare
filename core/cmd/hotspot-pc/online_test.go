@@ -1,0 +1,110 @@
+package main
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+var goodManifest = `{"code":40,"name":"1.1.1",
+ "apk":{"name":"AleShare.apk","url":"https://github.com/furkaanarslnn/AleShare/releases/download/v1.1.1/AleShare.apk","size":25000000,"sha256":"` + sum64 + `"},
+ "pc":{"name":"AleShare.exe","url":"https://github.com/furkaanarslnn/AleShare/releases/download/v1.1.1/AleShare.exe","size":8500000,"sha256":"` + sum64 + `"}}`
+
+var sum64 = strings.Repeat("ab", 32)
+
+// The release's label is what it is called; the name beside it is for the apps of release 1.1.
+func TestManifestLabel(t *testing.T) {
+	r, err := parseManifest([]byte(strings.Replace(goodManifest, `"name":"1.1.1"`, `"name":"1.1.1","label":"1.2"`, 1)))
+	if err != nil || r.Code != 40 || r.Name != "1.2" {
+		t.Fatalf("got %+v, %v", r, err)
+	}
+}
+
+func TestParseManifest(t *testing.T) {
+	r, err := parseManifest([]byte("\xef\xbb\xbf" + goodManifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Code != 40 || r.Name != "1.1.1" || r.PC.Size != 8500000 || r.APK.Name != "AleShare.apk" {
+		t.Fatalf("got %+v", r)
+	}
+	bad := map[string]string{
+		"a file on another site":       strings.Replace(goodManifest, "https://github.com/furkaanarslnn/AleShare/releases/download/v1.1.1/AleShare.exe", "https://example.com/AleShare.exe", 1),
+		"a file in another repository": strings.Replace(goodManifest, "furkaanarslnn/AleShare/releases/download/v1.1.1/AleShare", "someone/AleShare/releases/download/v1.1.1/AleShare", 1),
+		"no name":                      strings.Replace(goodManifest, `"name":"1.1.1"`, `"name":""`, 1),
+		"no size":                      strings.Replace(goodManifest, `"size":8500000`, `"size":0`, 1),
+		"a short checksum":             strings.Replace(goodManifest, sum64+`"}}`, `abcd"}}`, 1),
+		"not JSON":                     "<html>Not Found</html>",
+	}
+	for what, text := range bad {
+		if _, err := parseManifest([]byte(text)); err == nil {
+			t.Errorf("accepted %s", what)
+		}
+	}
+}
+
+func TestOnlineOfferAndAnnouncement(t *testing.T) {
+	rel, _ := parseManifest([]byte(goodManifest))
+	s := onlineState{Release: &rel}
+	if s.offer(39) == nil || s.offer(40) != nil || s.offer(41) != nil {
+		t.Fatal("only an older installation is offered the release")
+	}
+	if s.offer(0) != nil {
+		t.Fatal("a build that is no release must be offered nothing")
+	}
+	if (onlineState{}).offer(1) != nil {
+		t.Fatal("nothing known, nothing offered")
+	}
+	if s.announce(39) == nil {
+		t.Fatal("a new release must be told")
+	}
+	s.Told = 40
+	if s.announce(39) != nil {
+		t.Fatal("a release is told once")
+	}
+	newer := rel
+	newer.Code, newer.Name = 41, "1.1.2"
+	s.Release = &newer
+	if r := s.announce(39); r == nil || r.Code != 41 {
+		t.Fatal("the next release must be told again")
+	}
+}
+
+func TestOnlineLooksAreSpaced(t *testing.T) {
+	t0 := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
+	if !(onlineState{}).due(t0) {
+		t.Fatal("never looked: look")
+	}
+	s := onlineState{Checked: t0, Tried: t0}
+	if s.due(t0.Add(2*time.Hour)) || !s.due(t0.Add(3*time.Hour+time.Second)) {
+		t.Fatal("an answered look holds for three hours")
+	}
+	// Later there is no internet: try again in half an hour, not every few seconds.
+	failed := onlineState{Checked: t0, Tried: t0.Add(4 * time.Hour)}
+	if failed.due(t0.Add(4*time.Hour+10*time.Minute)) || !failed.due(t0.Add(4*time.Hour+31*time.Minute)) {
+		t.Fatal("a look without an answer is tried again after half an hour")
+	}
+	if !s.due(t0.Add(-time.Hour)) {
+		t.Fatal("a clock set back must not silence the looks")
+	}
+}
+
+// A look the user asked for says what came of it.
+func TestLookResult(t *testing.T) {
+	began := time.Date(2026, 11, 13, 7, 0, 0, 0, time.UTC)
+	newer := &onlineRelease{Code: 43, Name: "1.2.3"}
+	for name, c := range map[string]struct {
+		s        onlineState
+		text     string
+		answered bool
+	}{
+		"no answer":      {onlineState{Checked: began.Add(-time.Hour), Release: newer}, "GitHub'a ulaşılamadı. İnternet bağlantına bak.", false},
+		"a newer one":    {onlineState{Checked: began.Add(time.Second), Release: newer}, "AleShare 1.2.3 yayımlandı.", true},
+		"the newest":     {onlineState{Checked: began.Add(time.Second), Release: &onlineRelease{Code: 42, Name: "1.2.2"}}, "AleShare güncel.", true},
+		"none published": {onlineState{Checked: began.Add(time.Second)}, "AleShare güncel.", true},
+	} {
+		if text, answered := lookResult(c.s, began, 42); text != c.text || answered != c.answered {
+			t.Errorf("%s: %q, %v", name, text, answered)
+		}
+	}
+}

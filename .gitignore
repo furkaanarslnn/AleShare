@@ -1,0 +1,23 @@
+# Built files: build-android.ps1 makes them again from the sources.
+dist/
+uygulama/
+*.apk
+android/app/libs/*.aar
+android/app/libs/*-sources.jar
+android/app/src/main/assets/hotspot-pc.exe
+core/bin/
+
+# Gradle, Kotlin and IDE state.
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/.idea/
+*.iml
+android/local.properties
+
+# Signing keys and their passwords never go into the repository.
+android/keystore/
+android/keystore.properties
+*.jks
+*.keystore

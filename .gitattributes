@@ -1,0 +1,6 @@
+# The sources are written with LF line ends; keep them so on every checkout (gradlew must stay a valid shell script).
+* text=auto eol=lf
+*.bat text eol=crlf
+*.jar binary
+*.png binary
+*.webp binary

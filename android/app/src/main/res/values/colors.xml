@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The page colour, so the window is already the right shade before the first frame is drawn. -->
+    <color name="page">#F5F7F8</color>
+    <!-- The accent of the notifications: the app's primary colour. -->
+    <color name="accent">#0B6B80</color>
+    <!-- The home screen widget: the app's surface while sharing is off, its primary colour while it is on. -->
+    <color name="widget_surface">#FFFFFF</color>
+    <color name="widget_on_surface">#101820</color>
+    <color name="widget_on_surface_variant">#56626C</color>
+    <color name="widget_icon">#0B6B80</color>
+    <color name="widget_active">#0B6B80</color>
+    <color name="widget_on_active">#FFFFFF</color>
+    <color name="widget_on_active_variant">#CFE9EF</color>
+</resources>
