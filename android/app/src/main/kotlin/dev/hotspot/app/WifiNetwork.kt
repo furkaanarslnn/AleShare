@@ -151,8 +151,10 @@ object WifiNetwork {
 @SuppressLint("MissingPermission")
 class WifiDirectGroup(context: Context) {
   private val appContext = context.applicationContext
-  private val manager = context.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
-  private val channel = manager?.initialize(context, Looper.getMainLooper(), null)
+  private val manager = appContext.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
+  // With the application's context, and closed in remove(): one channel per start of sharing held the service
+  // that made it, and a registration with the system, for as long as the process lived.
+  private val channel = manager?.initialize(appContext, Looper.getMainLooper(), null)
   private val wifi = context.applicationContext.getSystemService(WifiManager::class.java)
 
   /** The group's frequency in MHz (2412…, 5180…) as the system tells it; [result] gets 0 when there is none. */
@@ -182,6 +184,16 @@ class WifiDirectGroup(context: Context) {
       m.requestGroupInfo(ch) { group ->
         when {
           closed -> done(CLOSED)
+          // Ours, but with another password: a change that the app's end cut off half-way (the new password was
+          // saved, the old group stayed). Devices are told the saved one, so the group opens again with it.
+          group != null && group.networkName == credentials.ssid && group.passphrase != null && group.passphrase != credentials.passphrase ->
+            m.removeGroup(ch, object : WifiP2pManager.ActionListener {
+              override fun onSuccess() {
+                handler.postDelayed({ if (closed) done(CLOSED) else create(credentials, done) }, REOPEN_DELAY_MILLIS)
+              }
+
+              override fun onFailure(reason: Int) = done("Eski Wi-Fi ağı kapatılamadı (hata $reason).")
+            })
           group != null && group.networkName == credentials.ssid -> done(null)
           group != null -> done("Başka bir uygulamanın Wi-Fi Direct grubu açık (${group.networkName}). Onu kapatıp yeniden dene.")
           else -> open(m, ch, credentials) { error ->
@@ -301,12 +313,22 @@ class WifiDirectGroup(context: Context) {
     val m = manager
     val ch = channel
     if (m == null || ch == null) return
+    val release = {
+      if (Build.VERSION.SDK_INT >= 27) runCatching { ch.close() }
+    }
     try {
       m.requestGroupInfo(ch) { group ->
-        if (group != null && group.networkName == credentials.ssid) m.removeGroup(ch, null)
+        if (group != null && group.networkName == credentials.ssid) {
+          m.removeGroup(ch, object : WifiP2pManager.ActionListener {
+            override fun onSuccess() = release()
+            override fun onFailure(reason: Int) = release()
+          })
+        } else {
+          release()
+        }
       }
     } catch (_: SecurityException) {
-      // nothing to remove without the permission
+      release() // nothing to remove without the permission
     }
   }
 

@@ -40,7 +40,9 @@ import (
 //	POST /hotspot-pc.exe?t=TOKEN            a newer Windows program from a computer
 //	GET  /phone?t=TOKEN                     the phone's state as the app tells it (SetPhoneStatus), JSON
 //	POST /phone?t=TOKEN                     a change a computer asks for, a JSON object (TakeControls); with the
-//	                                        devices' token only {"speedtest":true}
+//	                                        devices' token only {"speedtest":true}, once in five minutes
+//	GET  /speed?t=TOKEN&bytes=N             N bytes to measure the Wi-Fi to the phone (nothing of it goes to the internet)
+//	POST /speed?t=TOKEN                     a body to measure the way up; the answer says how much came in how long
 
 // UpdatePort is where the phone hands out and takes releases: on its Wi-Fi network, and on its own address inside
 // the tunnel (a computer whose tunnel is up can reach nothing else).
@@ -73,10 +75,15 @@ type updates struct {
 	status   string      // the phone's state for the computers, JSON (SetPhoneStatus)
 	controls []string    // changes the computers asked for, JSON objects, until the app takes them
 	bringing atomic.Bool // a device is bringing a file: one at a time (each holds megabytes of memory or disk)
+	// deviceTest is when a device that is no computer last had the phone measure its speed (see receiveControl).
+	deviceTest time.Time
 }
 
 // uploadTime is how long a device has to bring a file.
 const uploadTime = 5 * time.Minute
+
+// deviceTestEvery is how often a device that is no computer may have the phone measure its speed.
+const deviceTestEvery = 5 * time.Minute
 
 const (
 	maxControl  = 4 << 10
@@ -283,6 +290,14 @@ func (u *updates) receiveControl(w http.ResponseWriter, r *http.Request, compute
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	if !computer {
+		// Each test costs some 50 MB of the phone's mobile data: a device that is no computer gets one in a while.
+		if now := time.Now(); !u.deviceTest.IsZero() && now.Sub(u.deviceTest) >= 0 && now.Sub(u.deviceTest) < deviceTestEvery {
+			http.Error(w, "too soon", http.StatusTooManyRequests)
+			return
+		}
+		u.deviceTest = time.Now()
+	}
 	if len(u.controls) >= maxControls {
 		http.Error(w, "busy", http.StatusTooManyRequests)
 		return

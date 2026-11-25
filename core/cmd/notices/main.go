@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -165,20 +164,23 @@ var (
 		"JSpecify (The JSpecify Authors)",
 		"javax.inject (The JSR-330 Expert Group)",
 	}
+	// With the release the app is built with (gradlew :app:dependencies --configuration releaseRuntimeClasspath):
+	// the notices of another release may name other components. When the app moves to another release the
+	// command stops (not in the cache) until this list says so.
 	googleLibraries = []string{
-		"com.google.android.gms/play-services-base",
-		"com.google.android.gms/play-services-basement",
-		"com.google.android.gms/play-services-code-scanner",
-		"com.google.android.gms/play-services-tasks",
-		"com.google.mlkit/barcode-scanning-common",
-		"com.google.mlkit/common",
-		"com.google.mlkit/vision-common",
-		"com.google.android.odml/image",
-		"com.google.android.datatransport/transport-api",
-		"com.google.android.datatransport/transport-backend-cct",
-		"com.google.android.datatransport/transport-runtime",
-		"com.google.firebase/firebase-components",
-		"com.google.firebase/firebase-encoders-json",
+		"com.google.android.gms/play-services-base/18.1.0",
+		"com.google.android.gms/play-services-basement/18.1.0",
+		"com.google.android.gms/play-services-code-scanner/16.1.0",
+		"com.google.android.gms/play-services-tasks/18.0.2",
+		"com.google.mlkit/barcode-scanning-common/17.0.0",
+		"com.google.mlkit/common/18.9.0",
+		"com.google.mlkit/vision-common/17.0.0",
+		"com.google.android.odml/image/1.0.0-beta1",
+		"com.google.android.datatransport/transport-api/2.2.1",
+		"com.google.android.datatransport/transport-backend-cct/2.3.3",
+		"com.google.android.datatransport/transport-runtime/2.2.6",
+		"com.google.firebase/firebase-components/16.1.0",
+		"com.google.firebase/firebase-encoders-json/17.1.0",
 	}
 )
 
@@ -198,38 +200,12 @@ func (n *notices) androidLibraries(apache string) {
 		cache = filepath.Join(dir, "caches", "modules-2", "files-2.1")
 	}
 	for _, lib := range googleLibraries {
-		found, _ := filepath.Glob(filepath.Join(cache, filepath.FromSlash(lib), "*", "*", "*.aar"))
+		found, _ := filepath.Glob(filepath.Join(cache, filepath.FromSlash(lib), "*", "*.aar"))
 		if len(found) == 0 {
-			fail("%s: not in the Gradle cache (%s); build the app once", lib, cache)
+			fail("%s: not in the Gradle cache (%s); build the app once, or the app uses another release now", lib, cache)
 		}
-		// The newest release of it that was ever fetched. By its numbers: as text, "18.10.0" comes before "18.9.0".
-		newest := found[0]
-		for _, f := range found[1:] {
-			if newerVersion(cachedVersion(f), cachedVersion(newest)) {
-				newest = f
-			}
-		}
-		n.thirdParty(newest)
+		n.thirdParty(found[0])
 	}
-}
-
-// cachedVersion is the release of a library file in the Gradle cache: …/<library>/<release>/<hash>/<file>.
-func cachedVersion(path string) string { return filepath.Base(filepath.Dir(filepath.Dir(path))) }
-
-var versionNumber = regexp.MustCompile(`\d+`)
-
-// newerVersion reports whether release a is newer than b, comparing their numbers one by one ("1.0.0-beta1" has
-// the numbers 1, 0, 0, 1; a release with more numbers that agree so far is the newer one).
-func newerVersion(a, b string) bool {
-	x, y := versionNumber.FindAllString(a, -1), versionNumber.FindAllString(b, -1)
-	for i := 0; i < len(x) && i < len(y); i++ {
-		p, _ := strconv.Atoi(x[i])
-		q, _ := strconv.Atoi(y[i])
-		if p != q {
-			return p > q
-		}
-	}
-	return len(x) > len(y)
 }
 
 // thirdParty adds the notices inside one of Google's libraries: third_party_licenses.txt holds the texts end to

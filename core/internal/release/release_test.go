@@ -4,6 +4,10 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -80,5 +84,30 @@ func TestNamesAndNumbers(t *testing.T) {
 		if got := Code(name); got != 0 {
 			t.Errorf("Code(%q) = %d, but no release is called that", name, got)
 		}
+	}
+}
+
+// The app names releases with a function of its own (releaseName in Util.kt), as the Windows program does with
+// Name: both must follow the table here. A release named in the table but not in the app would show under another
+// name on the phones.
+func TestAppNamesReleasesTheSameWay(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "..", "android", "app", "src", "main", "kotlin", "dev", "hotspot", "app", "Util.kt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(src)
+	for i, n := range named {
+		if i == 0 {
+			if want := fmt.Sprintf("code < %d -> \"1.0.$code\"", n.code); !strings.Contains(text, want) {
+				t.Errorf("Util.kt lacks %s", want)
+			}
+		}
+		if want := fmt.Sprintf("code == %dL -> \"%s\"", n.code, n.name); !strings.Contains(text, want) {
+			t.Errorf("Util.kt lacks %s", want)
+		}
+	}
+	last := named[len(named)-1]
+	if want := fmt.Sprintf("else -> \"%s.${code - %d}\"", last.name, last.code); !strings.Contains(text, want) {
+		t.Errorf("Util.kt lacks %s", want)
 	}
 }

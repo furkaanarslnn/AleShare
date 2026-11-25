@@ -176,6 +176,14 @@ func TestClientReachesTheGateway(t *testing.T) {
 	if !st.Handshake.IsZero() {
 		t.Fatal("no handshake can have happened before any packet was sent")
 	}
+	// Asked to, it shakes hands at once, before any data goes (a device that woke from a long sleep).
+	tunnel.Rekey()
+	for deadline := time.Now().Add(5 * time.Second); st.Handshake.IsZero() && time.Now().Before(deadline); st, _ = tunnel.Stats() {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if st.Handshake.IsZero() {
+		t.Fatal("Rekey did not shake hands with the phone")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

@@ -749,6 +749,10 @@ type protectedDialer struct{ p Protector }
 
 func (d protectedDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	nd := net.Dialer{
+		// A quiet connection to a site is kept alive now and then, so that the carrier does not forget it, but not
+		// every 15 seconds (Go's default): connections of a sleeping tablet now last for hours, and each probe
+		// wakes the phone's mobile radio.
+		KeepAliveConfig: net.KeepAliveConfig{Enable: true, Idle: 4 * time.Minute, Interval: 75 * time.Second, Count: 9},
 		Control: func(network, address string, c syscall.RawConn) error {
 			var ok bool
 			if err := c.Control(func(fd uintptr) { ok = d.p.Protect(int(fd)) }); err != nil {

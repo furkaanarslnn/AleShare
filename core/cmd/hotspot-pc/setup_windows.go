@@ -478,6 +478,13 @@ func installSelf(self string) error {
 		return nil
 	}
 	sweepAside(dst)
+	// The new program is written beside the old one first: the old one is moved aside only once the new one is
+	// whole, so that an install cut off half-way (the computer shut down) leaves a program that runs.
+	fresh := dst + ".new"
+	if err := copyFile(self, fresh); err != nil {
+		os.Remove(fresh)
+		return err
+	}
 	aside := ""
 	if _, err := os.Stat(dst); err == nil {
 		for i := 0; ; i++ {
@@ -493,13 +500,15 @@ func installSelf(self string) error {
 			}
 		}
 		if err := os.Rename(dst, aside); err != nil {
+			os.Remove(fresh)
 			return err
 		}
 	}
-	if err := copyFile(self, dst); err != nil {
+	if err := os.Rename(fresh, dst); err != nil {
 		if aside != "" {
 			_ = os.Rename(aside, dst) // keep the installation working
 		}
+		os.Remove(fresh)
 		return err
 	}
 	sweepAside(dst)
@@ -595,6 +604,7 @@ func doSetup(opts setupOptions, ui setupUI) error {
 	// holdSetup), or it would reopen the old tunnel in the middle of the pairing.
 	resume := holdSetup()
 	defer resume()
+	lockReconcile()() // a run that began before the mark was there ends first
 
 	var phone, profile string
 	var err error
@@ -657,7 +667,7 @@ func doSetup(opts setupOptions, ui setupUI) error {
 		return err
 	}
 	setMetered(profile)
-	if err := saveSettings(settings{Phone: phone, Profile: profile, AutoJoin: autoJoin, Version: version, Metered: true}); err != nil {
+	if err := saveSettings(settings{Phone: phone, Profile: profile, AutoJoin: autoJoin, Version: version, Metered: true, Owner: currentAccount()}); err != nil {
 		return err
 	}
 	saveNextWifi(nil) // a change the phone announced to an earlier installation is not this one's business
@@ -1042,6 +1052,9 @@ func doUpgrade() error {
 	if err != nil {
 		return err
 	}
+	if set, err := loadSettings(); err == nil && !newerOrSame(versionCode(version), versionCode(set.Version)) {
+		return fmt.Errorf("bu dosya AleShare %s; bilgisayarda daha yeni olan %s kurulu", version, set.Version)
+	}
 	keepSiblingAPK(self) // the release folder's APK comes along, for the phones
 	return upgradeFrom(self, version)
 }
@@ -1063,6 +1076,9 @@ func upgradeFrom(src, name string) error {
 		return fmt.Errorf("program kopyalanamadı: %w", err)
 	}
 	if err := installWatchService(); err != nil {
+		if !inService {
+			_ = startWatchService() // the one there is goes on: the tunnel must not be left without its watcher
+		}
 		return fmt.Errorf("izleme hizmeti kurulamadı: %w", err)
 	}
 	if !inService {
@@ -1070,13 +1086,19 @@ func upgradeFrom(src, name string) error {
 			return fmt.Errorf("izleme hizmeti başlatılamadı: %w", err)
 		}
 	}
-	if set, err := loadSettings(); err == nil && (set.Version != name || !set.Metered) {
-		if !set.Metered {
-			setMetered(set.Profile) // installations older than 1.0.18, once
-			set.Metered = true
+	if set, err := loadSettings(); err == nil {
+		owner := set.Owner
+		if owner == "" && !inService {
+			owner = currentAccount() // an installation older than 1.2.5: the account that upgrades it now
 		}
-		set.Version = name
-		_ = saveSettings(set)
+		if set.Version != name || !set.Metered || owner != set.Owner {
+			if !set.Metered {
+				setMetered(set.Profile) // installations older than 1.0.18, once
+				set.Metered = true
+			}
+			set.Version, set.Owner = name, owner
+			_ = saveSettings(set)
+		}
 	}
 	if err := createShortcut(); err != nil {
 		logf("Başlat menüsü kısayolu yazılamadı: %v", err)

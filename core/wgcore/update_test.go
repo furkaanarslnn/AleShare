@@ -183,8 +183,15 @@ func TestPhoneStatusAndControls(t *testing.T) {
 	if code, _ := s.do(t, "POST", "/phone?t="+less, []byte(`{"speedtest":true}`)); code != 200 {
 		t.Errorf("a device asked for a speed test: %d", code)
 	}
+	// Each test costs mobile data: a device gets one in a while; a computer is not held back.
+	if code, _ := s.do(t, "POST", "/phone?t="+less, []byte(`{"speedtest":true}`)); code != http.StatusTooManyRequests {
+		t.Errorf("a device's second test at once: %d", code)
+	}
+	if code, _ := s.do(t, "POST", "/phone?t="+s.tok, []byte(`{"speedtest":true}`)); code != 200 {
+		t.Errorf("a computer's test after a device's: %d", code)
+	}
 	c := &Core{upd: s.u}
-	if got := c.TakeControls(); got != "{\"split\":true}\n{\"limit_mb\":2048}\n{\"speedtest\":true}" {
+	if got := c.TakeControls(); got != "{\"split\":true}\n{\"limit_mb\":2048}\n{\"speedtest\":true}\n{\"speedtest\":true}" {
 		t.Fatalf("controls %q", got)
 	}
 	if c.TakeControls() != "" {

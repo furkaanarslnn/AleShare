@@ -84,8 +84,26 @@ class ClientService : VpnService() {
   // never asked the phone again, or never looked for its network again.)
   private val watcher = Runnable { watch() }
 
-  /** The tunnel is opened again after the phone fell silent; on an alarm, so that it happens while the device sleeps too. */
-  private val retryAlarm = AlarmManager.OnAlarmListener { network?.let(::openTunnel) }
+  /**
+   * The next search and the next try after the phone fell silent wait on alarms that are delivered to this
+   * service even in Android's deep sleep (Doze), at most every few minutes there. An alarm with a listener, as
+   * they were, waits for the device's next maintenance window, which can be an hour away: a tablet lying still
+   * stopped looking for the phone.
+   */
+  private fun alarmIntent(action: String): PendingIntent =
+    PendingIntent.getService(this, action.hashCode(), Intent(this, ClientService::class.java).setAction(action),
+      PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+
+  private fun alarmIn(action: String, delay: Long) {
+    val pi = alarmIntent(action)
+    alarms.cancel(pi)
+    alarms.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + delay, pi)
+  }
+
+  private fun cancelAlarm(action: String) = alarms.cancel(alarmIntent(action))
+
+  /** When the tunnel was last told to shake hands with the phone (see [watch]). */
+  private var rekeyedAt = 0L
 
   /**
    * The next search for the phone's network waits on an alarm, not on the main thread's clock: that clock stops
@@ -93,7 +111,6 @@ class ClientService : VpnService() {
    * alarm wakes the device for the search; the system's own scans and connection run on their own alarms.
    */
   private val alarms by lazy { getSystemService(AlarmManager::class.java) }
-  private val searchAlarm = AlarmManager.OnAlarmListener { requestNetwork() }
 
   /** When the open request for the phone's network was made (elapsed time); 0 when none is open. */
   private var requestedAt = 0L
@@ -131,6 +148,16 @@ class ClientService : VpnService() {
       // This app's sockets are on the phone's Wi-Fi network, outside the tunnel: the phone measures the internet.
       val wifi = network
       SpeedTest.startThroughPhone(this, store.takeIf { wifi != null }) { url -> wifi!!.openConnection(URL(url)) as HttpURLConnection }
+      return START_STICKY
+    }
+    if (intent?.action == ACTION_SEARCH || intent?.action == ACTION_RETRY) {
+      // One of this service's own alarms. A process that Android ended meanwhile has nothing to go on: it stops.
+      if (join == null) {
+        stopSelf(startId)
+        return START_NOT_STICKY
+      }
+      if (intent.action == ACTION_SEARCH && network == null && loopbackApp == null) requestNetwork()
+      if (intent.action == ACTION_RETRY && tunnel == null) network?.let(::openTunnel)
       return START_STICKY
     }
     if (intent?.action == ACTION_RELOAD) {
@@ -186,11 +213,8 @@ class ClientService : VpnService() {
     ContextCompat.registerReceiver(this, receiver, IntentFilter(Intent.ACTION_SCREEN_ON), ContextCompat.RECEIVER_NOT_EXPORTED)
   }
 
-  /** The next search, in [delay] milliseconds (see [searchAlarm]). */
-  private fun searchIn(delay: Long) {
-    alarms.cancel(searchAlarm)
-    alarms.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + delay, "AleShare:search", searchAlarm, handler)
-  }
+  /** The next search, in [delay] milliseconds (see [alarmIntent]). */
+  private fun searchIn(delay: Long) = alarmIn(ACTION_SEARCH, delay)
 
   /**
    * A test aid for one device: the tunnel runs to this phone's own gateway and carries only the traffic of [app],
@@ -217,7 +241,7 @@ class ClientService : VpnService() {
    */
   private fun requestNetwork() {
     if (Build.VERSION.SDK_INT < 29) return
-    alarms.cancel(searchAlarm)
+    cancelAlarm(ACTION_SEARCH)
     val t = target ?: return
     // Android looks for a network once per request and does not come back to it when the network is gone, so a
     // fresh request is made whenever the old one ran out (see [onSearchEnded]) or the network was lost.
@@ -332,6 +356,11 @@ class ClientService : VpnService() {
   private fun reload() {
     val saved = ClientStore.load(this) ?: return fail("Kayıtlı bağlantı yok")
     closeTunnel()
+    // Perhaps another phone: what the old one offered (its release, its store and token) goes with it.
+    store = null
+    broughtCode = 0L
+    ClientState.update { it.copy(update = null) }
+    File(cacheDir, "updates").takeIf { it.exists() }?.deleteRecursively()
     callback?.let { runCatching { connectivity.unregisterNetworkCallback(it) } }
     callback = null
     network = null
@@ -520,6 +549,7 @@ class ClientService : VpnService() {
     txAtRx = 0
     lastWatchAt = 0L
     wokeAt = 0L
+    rekeyedAt = 0L
     handler.postDelayed(watcher, WATCH_MILLIS)
   }
 
@@ -537,11 +567,20 @@ class ClientService : VpnService() {
       // silence is counted again from the waking.
       Log.i(TAG, "woke after ${(now - lastWatchAt) / 1000} s asleep")
       wokeAt = now
+      rekeyedAt = 0L // shake hands at once (below)
       lastRxAt = now
       txAtRx = tx
       openedAt = maxOf(openedAt, now - WATCH_MILLIS)
     }
     lastWatchAt = now
+    // WireGuard times its keys with a clock that stops while the device sleeps: after a sleep it still uses keys the
+    // phone has thrown away, and only renews them once data goes unanswered. An idle tunnel then fell silent and was
+    // closed. Once the handshake is getting old (by the wall clock, sleep included) the tunnel is told to shake
+    // hands now; a phone that is there answers within a second.
+    if (age > REKEY_AFTER_SECONDS && now - rekeyedAt > REKEY_EVERY_MILLIS) {
+      rekeyedAt = now
+      runCatching { t.rekey() }
+    }
     if (rx != lastRx) {
       lastRx = rx
       lastRxAt = now
@@ -557,7 +596,7 @@ class ClientService : VpnService() {
       // Give the normal internet back instead of leaving the tunnel to swallow everything, and try again later.
       closeTunnel()
       publish(ClientPhase.Unreachable)
-      alarms.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, now + RETRY_MILLIS, "AleShare:retry", retryAlarm, handler)
+      alarmIn(ACTION_RETRY, RETRY_MILLIS)
       return
     }
     if (age >= 0) {
@@ -608,7 +647,7 @@ class ClientService : VpnService() {
 
   private fun closeTunnel() {
     handler.removeCallbacks(watcher)
-    alarms.cancel(retryAlarm)
+    cancelAlarm(ACTION_RETRY)
     tunnel?.stop()
     tunnel = null
     noteRx = null
@@ -628,7 +667,7 @@ class ClientService : VpnService() {
   private fun shutDown() {
     closeTunnel()
     handler.removeCallbacksAndMessages(null) // everything: nothing of this connection is wanted any more
-    alarms.cancel(searchAlarm)
+    cancelAlarm(ACTION_SEARCH)
     requestedAt = 0L
     screenWatcher?.let { runCatching { unregisterReceiver(it) } }
     screenWatcher = null
@@ -658,7 +697,12 @@ class ClientService : VpnService() {
    * connection must come back, so the wish to be connected is kept unless the consent now belongs to another app.
    */
   override fun onRevoke() {
-    if (prepare(this) != null) setWanted(this, false)
+    // The user took the VPN down in Android's settings, another VPN app took its place, or this app is being
+    // updated. Only the last should bring the connection back: it is told apart by the update that follows within
+    // moments (BootReceiver, revokedBeforeUpdate). Anything else stays off until the user connects again.
+    val wanted = wanted(this)
+    setWanted(this, false)
+    if (wanted && prepare(this) == null) prefs(this).edit().putLong(KEY_REVOKED_AT, System.currentTimeMillis()).apply()
     shutDown()
     stopSelf()
   }
@@ -675,7 +719,7 @@ class ClientService : VpnService() {
     return when (phase) {
       ClientPhase.Connected -> clientNote(0, 0, ClientState.state.value.rx, ClientState.state.value.tx)
       ClientPhase.Connecting -> LiveNote("Bağlanıyor", ssid)
-      ClientPhase.Unreachable -> LiveNote("Telefon yanıt vermiyor", "Şimdilik kendi internetin kullanılıyor; yeniden denenecek.")
+      ClientPhase.Unreachable -> LiveNote("Telefon yanıt vermiyor", "Paylaşımın açık olduğuna bak; birazdan yeniden denenecek.")
       else -> LiveNote("Telefon aranıyor", "$ssid ağı yakına gelince bağlanır.")
     }
   }
@@ -703,6 +747,11 @@ class ClientService : VpnService() {
     private const val ACTION_RELOAD = "dev.hotspot.app.CLIENT_RELOAD"
     private const val ACTION_DOWNLOAD_UPDATE = "dev.hotspot.app.CLIENT_DOWNLOAD_UPDATE"
     private const val ACTION_SPEED_TEST = "dev.hotspot.app.CLIENT_SPEED_TEST"
+    private const val ACTION_SEARCH = "dev.hotspot.app.CLIENT_SEARCH"
+    private const val ACTION_RETRY = "dev.hotspot.app.CLIENT_RETRY"
+    /** A handshake older than this (by the wall clock) is renewed at once; WireGuard itself renews after 120 s. */
+    private const val REKEY_AFTER_SECONDS = 150L
+    private const val REKEY_EVERY_MILLIS = 20_000L
     private const val CHANNEL_ID = "client"
     private const val NOTIFICATION_ID = 2
     const val FIRST_SEARCH_TIMEOUT_MILLIS = 60_000L
@@ -754,6 +803,24 @@ class ClientService : VpnService() {
     private fun prefs(context: Context) = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
     private const val KEY_WANTED = "client_wanted"
+    private const val KEY_REVOKED_AT = "client_revoked_at"
+
+    /**
+     * Whether the connection was taken down by the update that is just being finished (see onRevoke): Android
+     * revokes the VPN right before it replaces the app. The mark is read once.
+     */
+    fun revokedBeforeUpdate(context: Context): Boolean {
+      val p = prefs(context)
+      val at = p.getLong(KEY_REVOKED_AT, 0L)
+      p.edit().remove(KEY_REVOKED_AT).apply()
+      val ago = System.currentTimeMillis() - at
+      return at != 0L && ago in 0..REVOKED_UPDATE_MILLIS
+    }
+
+    /** Marks the connection wanted again (after an update that revoked it). */
+    fun wantAgain(context: Context) = setWanted(context, true)
+
+    private const val REVOKED_UPDATE_MILLIS = 5 * 60_000L
 
     fun stop(context: Context) {
       context.startService(Intent(context, ClientService::class.java).setAction(ACTION_STOP))

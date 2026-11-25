@@ -3,6 +3,8 @@ package gateway
 import (
 	"context"
 	"net/netip"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -74,9 +76,9 @@ func TestFlowSetCutsOneClient(t *testing.T) {
 	var f flowSet
 	a, b := netip.MustParseAddr("10.8.0.2"), netip.MustParseAddr("10.8.0.3")
 	var cutA, cutB int
-	removeA1 := f.add(a, func() { cutA++ })
-	f.add(a, func() { cutA++ })
-	f.add(b, func() { cutB++ })
+	removeA1 := f.add(a, testFlow(func() { cutA++ }, false, 0))
+	f.add(a, testFlow(func() { cutA++ }, false, 0))
+	f.add(b, testFlow(func() { cutB++ }, false, 0))
 	removeA1()
 	if n := f.cut(a); n != 1 || cutA != 1 || cutB != 0 {
 		t.Fatalf("cut %d: a %d, b %d", n, cutA, cutB)
@@ -218,35 +220,81 @@ func TestPriorityRemembersTheLinkThroughAQuietWhile(t *testing.T) {
 	}
 }
 
-// A device at its limit loses its oldest flow to a new one, never a flow of another device; when all of them
-// together are at theirs, the one that holds the most gives way.
-func TestFlowSetMakesRoomFromTheOldest(t *testing.T) {
+// testFlow is a flow that last carried something at the given time.
+func testFlow(stop func(), udp bool, at int64) *flow {
+	var a atomic.Int64
+	a.Store(at)
+	return &flow{stop: stop, udp: udp, active: &a}
+}
+
+// A device at its limit gives up a flow for a new one: a UDP flow first, then the one quiet the longest; never a
+// flow of another device. A connection that carries data is the last to go.
+func TestFlowSetMakesRoomFromTheQuietest(t *testing.T) {
 	var f flowSet
 	a, b := netip.MustParseAddr("10.8.0.2"), netip.MustParseAddr("10.8.0.3")
-	var ended []int
-	for i := 0; i < maxClientFlows; i++ {
-		i := i
-		f.add(a, func() { ended = append(ended, i) })
+	var ended []string
+	end := func(name string) func() { return func() { ended = append(ended, name) } }
+	f.add(b, testFlow(end("b"), true, 1))
+	busy := testFlow(end("busy download"), false, 5)
+	f.add(a, busy)
+	f.add(a, testFlow(end("udp"), true, 900))
+	f.add(a, testFlow(end("quiet tcp"), false, 10))
+	for i := 3; i < maxClientFlows; i++ {
+		f.add(a, testFlow(end("other"), false, int64(1000+i)))
 	}
-	f.add(b, func() { ended = append(ended, -1) })
-	f.makeRoom(b)
-	if len(ended) != 0 {
-		t.Fatalf("room was made for a device below its limit: %v", ended)
+	if len(ended) != 0 || f.n != maxClientFlows+1 {
+		t.Fatalf("ended %v with %d flows", ended, f.n)
 	}
-	f.makeRoom(a)
-	if len(ended) != 1 || ended[0] != 0 {
-		t.Fatalf("ended %v, want the oldest flow of the full device", ended)
+	f.add(a, testFlow(end("new"), false, 5000))
+	if len(ended) != 1 || ended[0] != "udp" {
+		t.Fatalf("ended %v, want the UDP flow first", ended)
 	}
-	f.makeRoom(a) // below its limit now: nothing more goes
-	if len(ended) != 1 {
-		t.Fatalf("ended %v after the room was made", ended)
+	busy.active.Store(6000) // the download goes on
+	f.add(a, testFlow(end("new"), false, 5000))
+	if len(ended) != 2 || ended[1] != "quiet tcp" {
+		t.Fatalf("ended %v, want the quietest TCP flow next", ended)
 	}
-	f.add(a, func() { ended = append(ended, maxClientFlows) }) // full again
-	f.makeRoom(a)                                              // the first one taken is out of the set: now the second oldest goes
-	if len(ended) != 2 || ended[1] != 1 {
-		t.Fatalf("ended %v, want the second oldest next", ended)
+	if len(f.m[a]) != maxClientFlows || f.n != maxClientFlows+1 {
+		t.Fatalf("%d flows of a, %d in all", len(f.m[a]), f.n)
 	}
-	if f.n != maxClientFlows {
-		t.Fatalf("%d flows counted", f.n)
+}
+
+// Flows that start at the same moment do not take a device over its limit.
+func TestFlowSetStaysWithinTheLimit(t *testing.T) {
+	var f flowSet
+	a := netip.MustParseAddr("10.8.0.2")
+	var mu sync.Mutex
+	stopped := 0
+	var wg sync.WaitGroup
+	for i := 0; i < 3*maxClientFlows; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			f.add(a, testFlow(func() { mu.Lock(); stopped++; mu.Unlock() }, i%2 == 0, int64(i)))
+		}(i)
+	}
+	wg.Wait()
+	if len(f.m[a]) != maxClientFlows || stopped != 2*maxClientFlows {
+		t.Fatalf("%d flows kept, %d ended", len(f.m[a]), stopped)
+	}
+}
+
+func TestDialCountPerClient(t *testing.T) {
+	var d dialCount
+	a, b := netip.MustParseAddr("10.8.0.2"), netip.MustParseAddr("10.8.0.3")
+	for i := 0; i < maxClientDialing; i++ {
+		if !d.begin(a) {
+			t.Fatalf("refused at %d", i)
+		}
+	}
+	if d.begin(a) {
+		t.Fatal("one more than allowed")
+	}
+	if !d.begin(b) {
+		t.Fatal("another device was refused")
+	}
+	d.end(a)
+	if !d.begin(a) {
+		t.Fatal("refused after one ended")
 	}
 }

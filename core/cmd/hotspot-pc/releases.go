@@ -81,3 +81,9 @@ func apkRelease(name string) int {
 
 // versionCode is the release number of a release's name, "1.1" or "1.0.12" (0 for a build that is not a release).
 func versionCode(v string) int { return release.Code(v) }
+
+// newerOrSame reports whether a program of release own may be installed over the installed release: not an older
+// one over a newer one. A build that is no release (0) or an installation that does not know its release goes.
+func newerOrSame(own, installed int) bool {
+	return own == 0 || installed == 0 || own >= installed
+}

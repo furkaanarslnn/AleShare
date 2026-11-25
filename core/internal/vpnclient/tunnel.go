@@ -13,7 +13,8 @@ import (
 
 // Tunnel is a running client.
 type Tunnel struct {
-	dev *device.Device
+	dev   *device.Device
+	phone device.NoisePublicKey
 }
 
 // Start brings the tunnel up on dev, which it takes over: Close closes it. bind is how it reaches the network
@@ -31,7 +32,16 @@ func Start(dev tun.Device, c *Config, bind conn.Bind) (*Tunnel, error) {
 		d.Close()
 		return nil, fmt.Errorf("vpnclient: up: %w", err)
 	}
-	return &Tunnel{dev: d}, nil
+	return &Tunnel{dev: d, phone: device.NoisePublicKey(c.PublicKey)}, nil
+}
+
+// Rekey starts a handshake with the phone now. WireGuard times its keys with a clock that stops while the device
+// sleeps: a device that wakes from a long sleep still holds keys the phone threw away meanwhile, and sends with them
+// into the void until data goes unanswered. A fresh handshake ends that at once.
+func (t *Tunnel) Rekey() {
+	if p := t.dev.LookupPeer(t.phone); p != nil {
+		_ = p.SendHandshakeInitiation(false)
+	}
 }
 
 // Close takes the tunnel down.

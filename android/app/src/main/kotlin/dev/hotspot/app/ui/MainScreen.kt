@@ -657,7 +657,7 @@ fun MainScreen() {
                 ClientStore.clear(context)
                 savedJoin = null
               },
-              onVpnSettings = { context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS)) },
+              onVpnSettings = { openSettings(context, Intent(Settings.ACTION_VPN_SETTINGS)) },
               onDownloadUpdate = { ClientService.downloadUpdate(context) },
               onInstallUpdate = { installUpdate(context, it) },
             )
@@ -1141,8 +1141,12 @@ private fun WifiPanel(
       Banner(
         Tone.Info,
         AppIcons.Wifi,
-        if (waiting.isEmpty()) "Ağın adı ${change.ssid} oluyor."
-        else "Ağın adı ${change.ssid} olacak. Cihazlara haber veriliyor:${change.waitingFor.size - waiting.size}/${change.waitingFor.size} (beklenen: ${waiting.joinToString()})",
+        when {
+          waiting.isEmpty() && change.passwordOnly -> "Ağın parolası değişiyor."
+          waiting.isEmpty() -> "Ağın adı ${change.ssid} oluyor."
+          else -> (if (change.passwordOnly) "Ağın parolası değişecek." else "Ağın adı ${change.ssid} olacak.") +
+            " Cihazlara haber veriliyor: ${change.waitingFor.size - waiting.size}/${change.waitingFor.size} (beklenen: ${waiting.joinToString()})"
+        },
       )
       Row(modifier = Modifier.offset(x = (-12).dp)) {
         TextButton(onClick = onSwitchNow) { Text("Şimdi değiştir", style = MaterialTheme.typography.labelLarge) }
@@ -1689,7 +1693,11 @@ private fun setOwnNetworkPref(context: Context, value: Boolean) {
 }
 
 private fun requestIgnoreBattery(context: Context) {
-  context.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}")))
+  openSettings(
+    context,
+    Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}")),
+    Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+  )
 }
 
 /**
@@ -1729,7 +1737,7 @@ private fun OnlineUpdateBanner(alreadyHere: Long?) {
  */
 private fun installUpdate(context: Context, path: String) {
   if (!context.packageManager.canRequestPackageInstalls()) {
-    context.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}")))
+    openSettings(context, Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}")))
     Toast.makeText(context, "AleShare'e izin ver, sonra geri dönüp Kur'a dokun.", Toast.LENGTH_LONG).show()
     return
   }
@@ -1749,4 +1757,15 @@ private fun copyText(context: Context, label: String, text: String, sensitive: B
   }
   context.getSystemService(ClipboardManager::class.java).setPrimaryClip(clip)
   if (Build.VERSION.SDK_INT < 33) Toast.makeText(context, "$label kopyalandı", Toast.LENGTH_SHORT).show()
+}
+
+/**
+ * Opens one of Android's settings screens, or the next one given when a device has no such screen (some makers and
+ * work profiles leave them out); says so when there is none at all instead of ending the app.
+ */
+private fun openSettings(context: Context, vararg intents: Intent) {
+  for (intent in intents) {
+    if (runCatching { context.startActivity(intent) }.isSuccess) return
+  }
+  Toast.makeText(context, "Bu ayar ekranı bu cihazda yok.", Toast.LENGTH_LONG).show()
 }

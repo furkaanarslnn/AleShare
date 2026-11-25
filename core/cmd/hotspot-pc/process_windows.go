@@ -22,7 +22,7 @@ func hasConsole() bool {
 // command is exec.Command for the console programs this one runs (netsh, PowerShell, schtasks…). Without a console
 // of our own, each would open a black window for a moment; they get none. With one they share it, as usual.
 func command(name string, args ...string) *exec.Cmd {
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(sysPath(name), args...)
 	if !hasConsole() {
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
 	}
@@ -60,7 +60,7 @@ func removeLater() {
 		`try { Remove-Item -LiteralPath ` + psQuote(installedExe()) + ` -Force -ErrorAction Stop; break } catch { Start-Sleep 2 } }; ` +
 		`Remove-Item -Path ` + psQuote(installedExe()+".old*") + ` -Force -ErrorAction SilentlyContinue; ` +
 		`Remove-Item -LiteralPath ` + psQuote(dataDir()) + ` -ErrorAction SilentlyContinue`
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	cmd := exec.Command(sysPath("powershell.exe"), "-NoProfile", "-NonInteractive", "-Command", script)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW | windows.DETACHED_PROCESS}
 	_ = cmd.Start()
 }
@@ -77,7 +77,29 @@ func removeFolderLater(dir string) {
 		`if (-not (Test-Path -LiteralPath ` + psQuote(dir) + `)) { break }; ` +
 		`try { Rename-Item -LiteralPath ` + psQuote(dir) + ` -NewName ` + psQuote(filepath.Base(gone)) + ` -ErrorAction Stop; ` +
 		`Remove-Item -LiteralPath ` + psQuote(gone) + ` -Recurse -Force -ErrorAction SilentlyContinue; break } catch { Start-Sleep 2 } }`
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	cmd := exec.Command(sysPath("powershell.exe"), "-NoProfile", "-NonInteractive", "-Command", script)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW | windows.DETACHED_PROCESS}
 	_ = cmd.Start()
+}
+
+// sysPath is where Windows keeps one of its own programs: they are run from there, not looked up in PATH. The
+// watcher service runs them as SYSTEM, and a folder anybody may write to, put in the system's PATH by some
+// installer, must not be where it finds them. Any other name is left to PATH (winget lives elsewhere).
+func sysPath(name string) string {
+	switch strings.ToLower(name) {
+	case "netsh.exe", "icacls.exe", "ping.exe", "schtasks.exe", "taskkill.exe", "wevtutil.exe", "msiexec.exe",
+		"sc.exe", "cmd.exe", "notepad.exe":
+		return filepath.Join(systemDir(), name)
+	case "powershell.exe":
+		return filepath.Join(systemDir(), "WindowsPowerShell", "v1.0", name)
+	}
+	return name
+}
+
+// systemDir is Windows' System32 folder.
+func systemDir() string {
+	if dir, err := windows.GetSystemDirectory(); err == nil && dir != "" {
+		return dir
+	}
+	return filepath.Join(os.Getenv("SystemRoot"), "System32")
 }

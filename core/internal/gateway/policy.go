@@ -65,17 +65,24 @@ func (g *Gateway) paused(client netip.Addr) bool {
 
 // flowSet knows the flows under way per client, to end them when the client is paused.
 type flowSet struct {
-	mu   sync.Mutex
-	m    map[netip.Addr]map[*func()]uint64 // each flow's stop, and when it began (a count)
-	n    int                               // flows of all clients
-	next uint64
+	mu sync.Mutex
+	m  map[netip.Addr]map[*flow]struct{}
+	n  int // flows of all clients
 }
 
-// makeRoom ends the oldest flow of client when it holds as many as it may, or the oldest flow of the client that
-// holds the most when all of them together do; a new flow of client then fits. The flow is taken out of the set
-// at once, so that the next new flow does not pick it again while it is still closing.
-func (f *flowSet) makeRoom(client netip.Addr) {
-	f.mu.Lock()
+// flow is one flow under way: how to end it, whether it is UDP, and when it last carried something (UnixNano,
+// written by the relay as data passes).
+type flow struct {
+	stop   func()
+	udp    bool
+	active *atomic.Int64
+}
+
+// victimLocked takes out of the set the flow that must make room for a new flow of client: when client holds as
+// many as it may, its own; when all clients together do, one of the client that holds the most. UDP flows go
+// first, then the one quiet for the longest; a connection in use (a download, a call) is the last to go. It
+// returns nil when there is room. Callers hold f.mu.
+func (f *flowSet) victimLocked(client netip.Addr) *flow {
 	from := netip.Addr{}
 	switch {
 	case len(f.m[client]) >= maxClientFlows:
@@ -87,50 +94,78 @@ func (f *flowSet) makeRoom(client netip.Addr) {
 			}
 		}
 	}
-	var stop func()
-	if from.IsValid() {
-		var oldest *func()
-		for key, began := range f.m[from] {
-			if oldest == nil || began < f.m[from][oldest] {
-				oldest = key
-			}
-		}
-		if oldest != nil {
-			stop = *oldest
-			delete(f.m[from], oldest)
-			f.n--
+	if !from.IsValid() {
+		return nil
+	}
+	var pick *flow
+	for fl := range f.m[from] {
+		if pick == nil || (fl.udp && !pick.udp) || (fl.udp == pick.udp && fl.active.Load() < pick.active.Load()) {
+			pick = fl
 		}
 	}
-	f.mu.Unlock()
-	if stop != nil {
-		stop()
+	if pick != nil {
+		delete(f.m[from], pick)
+		f.n--
 	}
+	return pick
 }
 
-// add registers a flow of client, ended by stop; the returned function unregisters it.
-func (f *flowSet) add(client netip.Addr, stop func()) (remove func()) {
+// add registers a flow of client and returns what unregisters it. When client, or all clients together, hold as
+// many flows as they may, one of them is ended to make room (see victimLocked); choosing and registering happen
+// under one lock, so that flows that start together cannot go over the limit.
+func (f *flowSet) add(client netip.Addr, fl *flow) (remove func()) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.m == nil {
-		f.m = map[netip.Addr]map[*func()]uint64{}
+		f.m = map[netip.Addr]map[*flow]struct{}{}
 	}
+	victim := f.victimLocked(client)
 	if f.m[client] == nil {
-		f.m[client] = map[*func()]uint64{}
+		f.m[client] = map[*flow]struct{}{}
 	}
-	key := &stop
-	f.next++
-	f.m[client][key] = f.next
+	f.m[client][fl] = struct{}{}
 	f.n++
+	f.mu.Unlock()
+	if victim != nil {
+		victim.stop() // outside the lock: ending a flow unregisters it
+	}
 	return func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		if _, there := f.m[client][key]; there {
+		if _, there := f.m[client][fl]; there {
 			f.n--
 		}
-		delete(f.m[client], key)
+		delete(f.m[client], fl)
 		if len(f.m[client]) == 0 {
 			delete(f.m, client)
 		}
+	}
+}
+
+// dialCount counts the connections being opened per client.
+type dialCount struct {
+	mu sync.Mutex
+	m  map[netip.Addr]int
+}
+
+// begin counts one more connection being opened for client; false when it has as many as it may.
+func (d *dialCount) begin(client netip.Addr) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.m == nil {
+		d.m = map[netip.Addr]int{}
+	}
+	if d.m[client] >= maxClientDialing {
+		return false
+	}
+	d.m[client]++
+	return true
+}
+
+func (d *dialCount) end(client netip.Addr) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.m[client]--; d.m[client] <= 0 {
+		delete(d.m, client)
 	}
 }
 
@@ -138,8 +173,8 @@ func (f *flowSet) add(client netip.Addr, stop func()) (remove func()) {
 func (f *flowSet) cut(client netip.Addr) int {
 	f.mu.Lock()
 	var stops []func()
-	for key := range f.m[client] {
-		stops = append(stops, *key)
+	for fl := range f.m[client] {
+		stops = append(stops, fl.stop)
 	}
 	f.mu.Unlock()
 	for _, stop := range stops {

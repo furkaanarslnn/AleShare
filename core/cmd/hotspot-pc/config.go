@@ -29,6 +29,23 @@ type settings struct {
 	Version string `json:"version,omitempty"`
 	// Metered says the phone's network was marked metered once (see setMetered); after that it is the user's.
 	Metered bool `json:"metered,omitempty"`
+	// Owner is the account (its SID) that set AleShare up: the window that reads the phone runs as it, and only
+	// it may read the phone's token (see savePhoneAccess). Empty for installations older than 1.2.5.
+	Owner string `json:"owner,omitempty"`
+}
+
+// writeFileAtomic writes data to path through a temporary file renamed over it: a reader never sees half a file,
+// and a power cut leaves the old one or the new one, never an empty one.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	part := path + ".part"
+	if err := os.WriteFile(part, data, perm); err != nil {
+		return err
+	}
+	if err := os.Rename(part, path); err != nil {
+		os.Remove(part)
+		return err
+	}
+	return nil
 }
 
 // version is this program's release, set by the build (-X main.version=1.1).
@@ -58,7 +75,7 @@ func saveSettings(s settings) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(settingsPath(), data, 0o644)
+	return writeFileAtomic(settingsPath(), data, 0o644)
 }
 
 // nextWifiPath holds the network that follows, password included, as a Windows profile was made for it. It is
@@ -80,7 +97,7 @@ func saveNextWifi(n *wifiinfo.Network) {
 		return
 	}
 	if data, err := json.Marshal(n); err == nil {
-		_ = os.WriteFile(nextWifiPath(), data, 0o600)
+		_ = writeFileAtomic(nextWifiPath(), data, 0o600)
 	}
 }
 
@@ -96,7 +113,7 @@ func loadHealth() health {
 
 func saveHealth(h health) {
 	if data, err := json.Marshal(h); err == nil {
-		_ = os.WriteFile(healthPath(), data, 0o644)
+		_ = writeFileAtomic(healthPath(), data, 0o644)
 	}
 }
 

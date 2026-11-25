@@ -6,7 +6,8 @@ import (
 )
 
 func TestReconcileRunsOneAtATime(t *testing.T) {
-	reconcileMutex = `Local\HotspotReconcileTest`
+	dir := t.TempDir()
+	lockDir = func() string { return dir }
 	unlock := lockReconcile()
 	got := make(chan time.Time)
 	go func() {
@@ -40,7 +41,8 @@ func TestWlanStatesIsCheapAndSteady(t *testing.T) {
 
 // While a setup holds its mark, a look at it finds it; afterwards it is gone.
 func TestSetupMark(t *testing.T) {
-	setupMutex = `Local\HotspotSetupTest`
+	dir := t.TempDir()
+	lockDir = func() string { return dir }
 	if setupRunning() {
 		t.Fatal("a setup is said to run before any began")
 	}

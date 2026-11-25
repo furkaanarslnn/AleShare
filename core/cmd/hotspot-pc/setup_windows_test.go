@@ -222,3 +222,50 @@ func TestInstallSelfWhileAnOlderCopyStillRuns(t *testing.T) {
 		t.Fatalf("release 2 stayed behind although nothing runs it: %v", left)
 	}
 }
+
+// An older release is not installed over a newer one; a build that is no release, or an installation that does
+// not know its release, goes.
+func TestNewerOrSame(t *testing.T) {
+	for _, c := range []struct {
+		own, installed int
+		want           bool
+	}{{44, 43, true}, {44, 44, true}, {43, 44, false}, {0, 44, true}, {44, 0, true}} {
+		if got := newerOrSame(c.own, c.installed); got != c.want {
+			t.Errorf("newerOrSame(%d, %d) = %v", c.own, c.installed, got)
+		}
+	}
+}
+
+// Windows' own programs are run from System32, not looked up in PATH.
+func TestSysPath(t *testing.T) {
+	sys := strings.ToLower(systemDir())
+	for _, name := range []string{"netsh.exe", "ICACLS.exe", "powershell.exe"} {
+		got := strings.ToLower(sysPath(name))
+		if !strings.HasPrefix(got, sys+`\`) {
+			t.Errorf("%s runs from %s", name, got)
+		}
+		if _, err := os.Stat(got); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if sysPath("winget.exe") != "winget.exe" {
+		t.Error("a program that is not Windows' own was given a path")
+	}
+}
+
+// A file written over is never seen half-written: the old content or the new.
+func TestWriteFileAtomic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := writeFileAtomic(path, []byte(`{"a":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileAtomic(path, []byte(`{"a":2}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != `{"a":2}` {
+		t.Fatalf("got %q", data)
+	}
+	if _, err := os.Stat(path + ".part"); !os.IsNotExist(err) {
+		t.Fatal("the temporary file stayed")
+	}
+}

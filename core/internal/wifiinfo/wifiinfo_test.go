@@ -238,3 +238,38 @@ func TestDevicesGetTheirOwnToken(t *testing.T) {
 		t.Fatalf("tablet without a device token: %+v, %v", info.App, err)
 	}
 }
+
+// A recorded request played back is answered, but does not count the device as one that learned the network that
+// follows; nor does it use up the device's own allowance. A new request of the device does count.
+func TestReplayMarksNothing(t *testing.T) {
+	server, device := wgkey.Generate(), wgkey.Generate()
+	r := NewResponder(server)
+	r.SetPeers([]wgkey.Key{device.Public()})
+	r.SetInfo(&Info{Current: current, Next: &next})
+	k, _ := pairKey(device, server.Public())
+	request := func(at time.Time) []byte {
+		c, err := stampedChallenge(at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return append(append([]byte(magic), c...), requestTag(k, c)...)
+	}
+	t0 := time.Now()
+	old := request(t0.Add(-time.Minute))
+	if r.Answer(request(t0)) == nil || len(r.Learned()) != 1 {
+		t.Fatal("a new request was not counted")
+	}
+	r.SetInfo(&Info{Current: current, Next: &Network{SSID: "DIRECT-Ba", Password: "baska-parola-1"}}) // another change
+	if r.Answer(old) == nil {
+		t.Fatal("a request seen before got no answer (a device whose answer was lost asks again)")
+	}
+	if len(r.Learned()) != 0 {
+		t.Fatal("a played-back request counted the device as told")
+	}
+	for i := 0; i < 5*burst; i++ {
+		r.Answer(old)
+	}
+	if r.Answer(request(t0.Add(time.Second))) == nil || len(r.Learned()) != 1 {
+		t.Fatal("played-back requests used up the device's own allowance")
+	}
+}

@@ -44,12 +44,17 @@ const (
 	maxInFlightSYN = 2048
 	// Each flow costs an outgoing socket, buffers and goroutines. A device, or a program gone wild on one, must not
 	// be able to open them without end: the app would run out of sockets for everybody. When a device is at its
-	// limit (or all of them together are), its oldest flow makes room for the new one, as a router's table does;
-	// no flow is ended only because it was quiet for a while (see flowSet.makeRoom).
-	maxClientFlows  = 1024
-	maxFlows        = 6000
-	dialTimeout     = 10 * time.Second
-	tcpDrainTimeout = 2 * time.Minute
+	// limit (or all of them together are), the flow that has been quiet the longest makes room for the new one,
+	// UDP before TCP, as a router's table does; no flow is ended only because it was quiet for a while (see
+	// flowSet.add).
+	maxClientFlows = 1024
+	maxFlows       = 6000
+	// Connections a device may have being opened at once. Opening one waits for the site up to dialTimeout; the
+	// stack takes maxInFlightSYN of them for all devices together, so one device trying thousands of addresses
+	// that never answer would stall everybody's new connections.
+	maxClientDialing = 256
+	dialTimeout      = 10 * time.Second
+	tcpDrainTimeout  = 2 * time.Minute
 	// A UDP "connection" has no end of its own: like a home router, the phone forgets one after it carried
 	// nothing either way for this long. A sleeping device's calls and games keep theirs alive by themselves.
 	udpIdleTimeout = 5 * time.Minute
@@ -74,14 +79,14 @@ const (
 	// A device's connections last as on any Wi-Fi: until the device or the site ends them, or sharing stops. A
 	// tablet lying idle sleeps, and its tunnel answers late or not at all, sometimes for hours; it still wants its
 	// connections (the ones that bring messages and notifications). So a quiet flow is probed only after two
-	// hours and given up after nine more unanswered probes, as a computer's own TCP does by default; data left
-	// unacknowledged is given as long. (Five minutes and four probes, as it was, cut every quiet connection of a
-	// device asleep for seven minutes.) A device that is really gone loses its flows when it is removed, when
-	// sharing stops, or one by one when its address needs the room (see flowSet.makeRoom).
+	// hours and given up after nine more unanswered probes, as a computer's own TCP does by default. Data left
+	// unacknowledged is sent again as TCP does anywhere, fifteen times with growing pauses (about a quarter of an
+	// hour) before the flow is given up. (Five minutes and four probes, as it was, cut every quiet connection of
+	// a device asleep for seven minutes.) A device that is really gone loses its flows when it is removed, when
+	// sharing stops, or one by one when its address needs the room (see flowSet.add).
 	defaultKeepAliveIdle     = 2 * time.Hour
 	defaultKeepAliveInterval = 75 * time.Second
 	defaultKeepAliveCount    = 9
-	defaultUserTimeout       = 2 * time.Hour
 )
 
 var (
@@ -151,7 +156,9 @@ type Options struct {
 	KeepAliveCount    int
 	// UserTimeout ends a TCP flow whose data stays unacknowledged for this long:
 	// the keepalive does not run while data is in flight, so a client that vanishes
-	// mid-download is caught by this instead. Default 2 hours.
+	// mid-download is caught by this instead. Zero (the default) leaves it to TCP's own count of resends. It
+	// must be longer than the keepalive's idle time and all its probes, or it ends a quiet flow at the first
+	// unanswered probe.
 	UserTimeout time.Duration
 }
 
@@ -199,10 +206,11 @@ type Gateway struct {
 	done      chan struct{}
 	closeOnce sync.Once
 
-	stats counters
-	flows flowSet   // the flows under way per client, for CutClient
-	usage usage     // the bytes per client, for ClientBytes
-	prio  *priority // see Options.Priority
+	stats   counters
+	flows   flowSet   // the flows under way per client, for CutClient
+	dialing dialCount // connections being opened per client
+	usage   usage     // the bytes per client, for ClientBytes
+	prio    *priority // see Options.Priority
 }
 
 // New creates a Gateway.
@@ -221,9 +229,6 @@ func New(opts Options) (*Gateway, error) {
 	}
 	if opts.KeepAliveCount == 0 {
 		opts.KeepAliveCount = defaultKeepAliveCount
-	}
-	if opts.UserTimeout == 0 {
-		opts.UserTimeout = defaultUserTimeout
 	}
 
 	s := stack.New(stack.Options{
@@ -402,9 +407,14 @@ func (g *Gateway) handleTCP(r *tcp.ForwarderRequest) {
 
 	// The forwarder runs us in our own goroutine, so we can dial first and
 	// only then accept: a failed dial turns into a RST the client sees at once.
+	if !g.dialing.begin(client.Addr()) {
+		r.Complete(true)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 	out, err := g.opts.Dialer.DialContext(ctx, "tcp", target.String())
 	cancel()
+	g.dialing.end(client.Addr())
 	if err != nil {
 		g.stats.dialErrors.Add(1)
 		r.Complete(true)
@@ -427,8 +437,10 @@ func (g *Gateway) handleTCP(r *tcp.ForwarderRequest) {
 	interval := tcpip.KeepaliveIntervalOption(g.opts.KeepAliveInterval)
 	ep.SetSockOpt(&interval)
 	ep.SetSockOptInt(tcpip.KeepaliveCountOption, g.opts.KeepAliveCount)
-	userTimeout := tcpip.TCPUserTimeoutOption(g.opts.UserTimeout)
-	ep.SetSockOpt(&userTimeout)
+	if g.opts.UserTimeout > 0 {
+		userTimeout := tcpip.TCPUserTimeoutOption(g.opts.UserTimeout)
+		ep.SetSockOpt(&userTimeout)
+	}
 	in := &stackConn{TCPConn: gonet.NewTCPConn(&wq, ep), ep: ep}
 	if g.opts.Split != nil && g.opts.Split() {
 		out = &splitConn{Conn: out, count: &g.stats.tcpSplit}
@@ -490,8 +502,9 @@ func (g *Gateway) relayTCP(in, out net.Conn, client netip.Addr) {
 	}
 	closeBoth, breakBoth := func() { end(false) }, func() { end(true) }
 	defer closeBoth()
-	g.flows.makeRoom(client)
-	defer g.flows.add(client, breakBoth)()
+	var active atomic.Int64 // when the flow last carried something (UnixNano), for flowSet.add
+	active.Store(time.Now().UnixNano())
+	defer g.flows.add(client, &flow{stop: breakBoth, active: &active})()
 	if g.paused(client) {
 		return // paused while the connection was being made: the cut that came with the pause did not see it yet
 	}
@@ -503,7 +516,7 @@ func (g *Gateway) relayTCP(in, out net.Conn, client netip.Addr) {
 	)
 	half := func(dst, src net.Conn, dir int, client netip.Addr) {
 		defer wg.Done()
-		if err := g.pipe(dst, src, dir, client); err != nil {
+		if err := g.pipe(dst, src, dir, client, &active); err != nil {
 			breakBoth()
 			return
 		}
@@ -533,7 +546,7 @@ func (g *Gateway) relayTCP(in, out net.Conn, client netip.Addr) {
 // pipe copies src to dst in one direction (down or up) for client and returns nil on a clean EOF. A big transfer
 // waits a little between reads while the priority holds it back (see priority), and any flow does when its device
 // or everyone has a speed limit (see Options.Limit).
-func (g *Gateway) pipe(dst, src net.Conn, dir int, client netip.Addr) error {
+func (g *Gateway) pipe(dst, src net.Conn, dir int, client netip.Addr, active *atomic.Int64) error {
 	ctr := &g.stats.bytesDown
 	if dir == up {
 		ctr = &g.stats.bytesUp
@@ -553,6 +566,7 @@ func (g *Gateway) pipe(dst, src net.Conn, dir int, client netip.Addr) error {
 			used.Add(int64(n))
 			moved += int64(n)
 			now := time.Now()
+			active.Store(now.UnixNano())
 			g.prio.carried(dir, n, now)
 			if wait := max(g.prio.hold(dir, moved, n, now), g.limitWait(client, dir, n, now)); wait > 0 {
 				time.Sleep(wait)
@@ -794,8 +808,9 @@ func (g *Gateway) relayUDP(in net.Conn, target netip.AddrPort, client netip.Addr
 		return
 	}
 	defer out.Close()
-	g.flows.makeRoom(client)
-	defer g.flows.add(client, func() { in.Close(); out.Close() })()
+	var last atomic.Int64 // when a datagram last went either way (UnixNano)
+	last.Store(time.Now().UnixNano())
+	defer g.flows.add(client, &flow{stop: func() { in.Close(); out.Close() }, udp: true, active: &last})()
 	if g.paused(client) {
 		return // paused while the socket was being opened
 	}
@@ -812,9 +827,6 @@ func (g *Gateway) relayUDP(in net.Conn, target netip.AddrPort, client netip.Addr
 	if target.Port() == 53 {
 		idle = dnsIdleTimeout
 	}
-	var last atomic.Int64
-	last.Store(time.Now().UnixNano())
-
 	pump := func(dst, src net.Conn, ctr *atomic.Int64, fromClient bool, done chan<- struct{}) {
 		dir := down
 		if fromClient {

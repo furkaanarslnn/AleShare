@@ -28,6 +28,10 @@ class BootReceiver : BroadcastReceiver() {
       // A mark that is not acted on now is a stale one: a later update must not act on it either.
       GatewayService.forgetSharing(context)
     }
+    // An update revoked the connection a moment ago (see ClientService.onRevoke): it comes back.
+    if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED && ClientService.revokedBeforeUpdate(context)) {
+      ClientService.wantAgain(context)
+    }
     // The VPN consent must still be there; asking for it needs a screen, so without it nothing starts.
     if (ClientService.wanted(context) && ClientStore.load(context) != null && VpnService.prepare(context) == null) {
       ClientService.start(context)

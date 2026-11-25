@@ -31,7 +31,7 @@ func loadReleases() releaseState {
 
 func saveReleases(s releaseState) {
 	if data, err := json.MarshalIndent(s, "", "  "); err == nil {
-		_ = os.WriteFile(releasesPath(), data, 0o644)
+		_ = writeFileAtomic(releasesPath(), data, 0o644)
 	}
 }
 

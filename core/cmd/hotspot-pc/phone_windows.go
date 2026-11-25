@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // The window shows how the phone is doing and changes its switches (wgcore: GET and POST /phone). It needs the
@@ -45,8 +47,40 @@ func savePhoneAccess(token string) {
 		return
 	}
 	if data, err := json.Marshal(phoneAccess{Token: token, At: time.Now()}); err == nil {
-		_ = os.WriteFile(phoneAccessPath(), data, 0o644)
+		if writeFileAtomic(phoneAccessPath(), data, 0o644) == nil {
+			restrictToOwner(phoneAccessPath())
+		}
 	}
+}
+
+// restrictToOwner lets only SYSTEM, the administrators and the account that set AleShare up read path. The token
+// in it changes the phone's switches and pauses devices: the other accounts of this computer have no business
+// with it. An installation that does not know its owner (older than 1.2.5) leaves the folder's rights.
+func restrictToOwner(path string) {
+	set, err := loadSettings()
+	if err != nil || set.Owner == "" {
+		return
+	}
+	if _, err := windows.StringToSid(set.Owner); err != nil {
+		return
+	}
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;" + set.Owner + ")")
+	if err != nil {
+		return
+	}
+	if dacl, _, err := sd.DACL(); err == nil {
+		_ = windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
+			windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+	}
+}
+
+// currentAccount is the SID of the account this process runs as ("" when it cannot be read).
+func currentAccount() string {
+	u, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return ""
+	}
+	return u.User.Sid.String()
 }
 
 func loadPhoneAccess() phoneAccess {

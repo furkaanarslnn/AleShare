@@ -162,7 +162,9 @@ class GatewayService : Service() {
   private fun changeBand() {
     val wifi = credentials
     val g = group
-    if (wifi == null || g == null || switching) return
+    // During a change of name or password the new network opens on the band now chosen anyway (WifiDirectGroup.open
+    // reads it); a second replacement at the same time would trip over the first.
+    if (wifi == null || g == null || switching || GatewayState.state.value.wifiChange != null) return
     switching = true
     val mine = session
     g.replace(wifi, wifi) { error ->
@@ -197,10 +199,13 @@ class GatewayService : Service() {
       planAt = 0L
       // The releases paired devices take from here, or bring here (see Updates): the newest APK this phone has,
       // and the Windows program that came inside the app.
-      runCatching {
-        core.setUpdateStore(Updates.storeDir(this).path)
-        Updates.bundledProgram(this)?.let { core.setPCProgram(it.path) }
-        offerApp(core, Updates.bestApk(this))
+      // Off the main thread: it copies the Windows program out of the app and reads APKs of tens of megabytes.
+      thread(name = "store", isDaemon = true) {
+        runCatching {
+          core.setUpdateStore(Updates.storeDir(this).path)
+          Updates.bundledProgram(this)?.let { core.setPCProgram(it.path) }
+          offerApp(core, Updates.bestApk(this))
+        }
       }
       DataUsage.started()
       core.start(port.toLong(), CellularProtector(net))
@@ -336,7 +341,7 @@ class GatewayService : Service() {
     val waiting = connectedFollowers(this, core)
     changeDeadline = SystemClock.elapsedRealtime() + CHANGE_WAIT_MILLIS
     allLearnedAt = 0L
-    GatewayState.update { it.copy(wifiChange = WifiChange(next.ssid, waiting, emptyList()), error = null) }
+    GatewayState.update { it.copy(wifiChange = WifiChange(next.ssid, waiting, emptyList(), passwordOnly = next.ssid == old.ssid), error = null) }
     handler.removeCallbacks(changeWatcher)
     handler.post(changeWatcher)
   }
@@ -358,9 +363,17 @@ class GatewayService : Service() {
     }
   }
 
+  private val switchLater = Runnable { switchWifi() }
+
   /** Closes the old network and opens the new one. If the new one cannot be opened, the old one comes back. */
   private fun switchWifi() {
     handler.removeCallbacks(changeWatcher)
+    handler.removeCallbacks(switchLater)
+    if (switching) {
+      // The band is being changed right now: the change waits for it.
+      handler.postDelayed(switchLater, 1000)
+      return
+    }
     val old = credentials
     val g = group
     val next = WifiNetwork.commitNext(this)
@@ -660,13 +673,18 @@ class GatewayService : Service() {
     val received = core.receivedApp().takeIf { it.isNotEmpty() } ?: return
     val (path, code) = received.split('\t').let { it[0] to (it.getOrNull(1)?.toLongOrNull() ?: 0L) }
     val file = java.io.File(path)
-    val apk = Updates.check(this, file, claimed = code)
-    if (apk == null || apk.code <= (GatewayState.state.value.pendingApp?.code ?: ownVersionCode(this))) {
-      file.delete()
-      return
+    // Reading a brought APK (tens of megabytes) takes a while: not on the main thread, which draws the notification.
+    thread(name = "received-apk", isDaemon = true) {
+      val apk = Updates.check(this, file, claimed = code)
+      handler.post {
+        if (apk == null || apk.code <= (GatewayState.state.value.pendingApp?.code ?: ownVersionCode(this))) {
+          file.delete()
+        } else if (GatewayState.state.value.running) {
+          offerApp(core, apk)
+          alertUpdate(apk)
+        }
+      }
     }
-    offerApp(core, apk)
-    alertUpdate(apk)
   }
 
   private fun alertUpdate(apk: Updates.Apk) {

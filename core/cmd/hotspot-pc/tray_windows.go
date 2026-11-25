@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"runtime"
@@ -329,9 +331,13 @@ func (t *tray) watch(hwnd windows.HWND) {
 	started := modTime(installedExe())
 	for {
 		set, err := loadSettings()
-		if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
 			postMessage.Call(uintptr(hwnd), wmClose, 0, 0) // uninstalled
 			return
+		}
+		if err != nil {
+			time.Sleep(trayEvery) // being written, or unreadable for a moment: look again
+			continue
 		}
 		connected := serviceState() == serviceRunning
 		var phone *phoneStatus

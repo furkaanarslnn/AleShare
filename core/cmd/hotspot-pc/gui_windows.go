@@ -89,7 +89,7 @@ type window struct {
 	answers  chan answer
 	busy     atomic.Bool // a setup or an action runs; only one at a time
 	checking atomic.Bool // GitHub is being asked because the user said so
-	upgrade  bool        // this file differs from the installed program (worked out once: hashing is not free)
+	upgrade  atomic.Bool // this file differs from the installed program and is not older (hashing is not free)
 	mu       sync.Mutex
 	last     windowState
 	setupNow bool
@@ -120,7 +120,7 @@ func runWindow(setupNow bool) error {
 	darkTitleBar(w)
 
 	g := &window{w: w, answers: make(chan answer), setupNow: setupNow}
-	g.upgrade = differs(installedExe())
+	g.upgrade.Store(canUpgrade())
 	g.last = g.collect()
 	for name, fn := range map[string]any{
 		"hsBoot":        g.boot,
@@ -181,7 +181,11 @@ func (g *window) watch() {
 func (g *window) refresh() {
 	s := g.collect()
 	g.mu.Lock()
-	same := fmt.Sprint(s) == fmt.Sprint(g.last)
+	// By content: fmt.Sprint printed the phone's part as memory addresses, so the state always "changed" and the
+	// page was rebuilt every three seconds, swallowing clicks that came at that moment.
+	now, _ := json.Marshal(s)
+	before, _ := json.Marshal(g.last)
+	same := string(now) == string(before)
 	g.last = s
 	g.mu.Unlock()
 	if !same {
@@ -190,7 +194,7 @@ func (g *window) refresh() {
 }
 
 func (g *window) collect() windowState {
-	s := windowState{Elevated: isElevated(), Version: version, Name: defaultName(), CanUpgrade: g.upgrade}
+	s := windowState{Elevated: isElevated(), Version: version, Name: defaultName(), CanUpgrade: g.upgrade.Load()}
 	set, err := loadSettings()
 	if err != nil {
 		return s
@@ -208,7 +212,7 @@ func (g *window) collect() windowState {
 		}
 	}
 	online := loadOnline()
-	if rel := online.offer(installedCode(set)); rel != nil && !g.upgrade {
+	if rel := online.offer(installedCode(set)); rel != nil && !g.upgrade.Load() {
 		s.Online = onlineOffer{Name: rel.Name, Size: rel.PC.Size}
 	}
 	if !online.Checked.IsZero() {
@@ -235,10 +239,21 @@ func (g *window) collect() windowState {
 // startSetup begins the setup; without administrator rights the window first reopens with them (Windows asks).
 func (g *window) startSetup() error {
 	if !isElevated() {
-		if err := shellRun("runas", "window -setup", windows.SW_NORMAL); err != nil {
+		h, err := shellStart("runas", "window -setup", windows.SW_NORMAL, true)
+		if err != nil {
 			return errors.New("Yönetici izni verilmedi; kurulum için gerekli.")
 		}
-		g.w.Dispatch(g.w.Terminate)
+		// This window steps aside for the one with administrator rights, and waits for it: the icon next to the
+		// clock must be started without those rights (see startTray), and the setup cannot do it.
+		showWindow.Call(uintptr(g.w.Window()), swHide)
+		go func() {
+			if h != 0 {
+				windows.WaitForSingleObject(h, windows.INFINITE)
+				windows.CloseHandle(h)
+			}
+			startTray()
+			g.w.Dispatch(g.w.Terminate)
+		}()
 		return nil
 	}
 	if !g.busy.CompareAndSwap(false, true) {
@@ -251,7 +266,7 @@ func (g *window) startSetup() error {
 func (g *window) runSetup() {
 	defer g.busy.Store(false)
 	err := doSetup(setupOptions{name: defaultName()}, windowUI{g})
-	g.upgrade = differs(installedExe())
+	g.upgrade.Store(canUpgrade())
 	switch {
 	case errors.Is(err, errCancelled):
 		g.emit(event{Type: "cancelled"})
@@ -323,7 +338,7 @@ func (g *window) act(name string, rest ...string) error {
 		defer g.busy.Store(false)
 		err := runElevated(name, rest...)
 		if name == "upgrade" && err == nil {
-			g.upgrade = differs(installedExe())
+			g.upgrade.Store(canUpgrade())
 		}
 		g.refresh() // first, so that the page's message reads the new state
 		e := event{Type: "action", Action: name}
@@ -522,7 +537,7 @@ func (g *window) speedTest() error {
 }
 
 func (g *window) openLog() error {
-	return exec.Command("notepad.exe", filepath.Join(dataDir(), "hotspot.log")).Start()
+	return exec.Command(sysPath("notepad.exe"), filepath.Join(dataDir(), "hotspot.log")).Start()
 }
 
 func onOffArg(on bool) string {
@@ -575,6 +590,19 @@ func lastLog(n int) []string {
 	return lines
 }
 
+// swHide is SW_HIDE for ShowWindow.
+const swHide = 0
+
+// canUpgrade reports whether this file may be offered for installing: another file than the installed program,
+// and not an older release than the one installed.
+func canUpgrade() bool {
+	if !differs(installedExe()) {
+		return false
+	}
+	set, err := loadSettings()
+	return err != nil || newerOrSame(versionCode(version), versionCode(set.Version))
+}
+
 // differs reports whether this program is another file than path (missing counts as other): then installing it
 // means something.
 func differs(path string) bool {
@@ -592,6 +620,7 @@ var (
 	shellExecuteExW   = shell32.NewProc("ShellExecuteExW")
 	user32            = windows.NewLazySystemDLL("user32.dll")
 	getDpiForSystem   = user32.NewProc("GetDpiForSystem")
+	showWindow        = user32.NewProc("ShowWindow")
 	errRightsRefused  = errors.New("Yönetici izni verilmedi.")
 	errActionNoAnswer = errors.New("İşlem tamamlanamadı.")
 )

@@ -18,6 +18,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"net"
@@ -148,6 +149,33 @@ type Responder struct {
 	asked   map[wgkey.Key]bool   // devices that asked at all: those follow a change by themselves
 	devices map[wgkey.Key]bool   // devices that are told DeviceToken (SetDevices)
 	rates   map[wgkey.Key]*rate  // how much each device may still ask
+	stamps  map[wgkey.Key]uint64 // the newest time a device put in a challenge (see stampedChallenge)
+	repeats *rate                // the allowance for requests that were seen before, all devices together
+}
+
+// A challenge from release 1.2.5 on begins with stampMark and the time it was made (UnixNano, big-endian); the
+// rest is random. The tag covers it, so nobody can change the time. A request that carries a time no newer than
+// the newest one of that device is a request seen before: a retry of a lost answer, or a recording played back by
+// someone on the network. It gets its answer (the device may need it), but marks nothing: a recording must not
+// pass for a device that has learned the network that follows. Older devices send random challenges and are
+// answered as before.
+const stampMark = "AST1"
+
+// stampedChallenge makes a challenge with the time t in it.
+func stampedChallenge(t time.Time) ([]byte, error) {
+	c := make([]byte, challengeLen)
+	copy(c, stampMark)
+	binary.BigEndian.PutUint64(c[len(stampMark):], uint64(t.UnixNano()))
+	_, err := rand.Read(c[len(stampMark)+8:])
+	return c, err
+}
+
+// challengeStamp reads the time out of a stamped challenge; ok is false for a random one.
+func challengeStamp(c []byte) (stamp uint64, ok bool) {
+	if len(c) != challengeLen || string(c[:len(stampMark)]) != stampMark {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(c[len(stampMark):]), true
 }
 
 // rate is one device's allowance of requests.
@@ -158,7 +186,8 @@ type rate struct {
 
 // NewResponder makes the phone's side. private is the WireGuard server key.
 func NewResponder(private wgkey.Key) *Responder {
-	return &Responder{private: private, peers: map[wgkey.Key][]byte{}, learned: map[wgkey.Key]bool{}, asked: map[wgkey.Key]bool{}, rates: map[wgkey.Key]*rate{}}
+	return &Responder{private: private, peers: map[wgkey.Key][]byte{}, learned: map[wgkey.Key]bool{}, asked: map[wgkey.Key]bool{},
+		rates: map[wgkey.Key]*rate{}, stamps: map[wgkey.Key]uint64{}, repeats: &rate{left: burst}}
 }
 
 // SetDevices names the devices that are told an App's DeviceToken in place of its Token.
@@ -202,6 +231,11 @@ func (r *Responder) SetPeers(public []wgkey.Key) {
 	for pub := range r.rates {
 		if _, still := peers[pub]; !still {
 			delete(r.rates, pub)
+		}
+	}
+	for pub := range r.stamps {
+		if _, still := peers[pub]; !still {
+			delete(r.stamps, pub)
 		}
 	}
 }
@@ -257,13 +291,9 @@ func (r *Responder) Learned() []wgkey.Key {
 	return out
 }
 
-// allow takes one request from the allowance of the paired device pub. Callers hold r.mu.
-func (r *Responder) allow(pub wgkey.Key, now time.Time) bool {
-	b := r.rates[pub]
-	if b == nil {
-		b = &rate{left: burst}
-		r.rates[pub] = b
-	} else {
+// take spends one request of the allowance b; false when there is none left.
+func (b *rate) take(now time.Time) bool {
+	if !b.filled.IsZero() {
 		b.left = min(b.left+now.Sub(b.filled).Seconds()*perSec, burst)
 	}
 	b.filled = now
@@ -272,6 +302,16 @@ func (r *Responder) allow(pub wgkey.Key, now time.Time) bool {
 	}
 	b.left--
 	return true
+}
+
+// allow takes one request from the allowance of the paired device pub. Callers hold r.mu.
+func (r *Responder) allow(pub wgkey.Key, now time.Time) bool {
+	b := r.rates[pub]
+	if b == nil {
+		b = &rate{left: burst}
+		r.rates[pub] = b
+	}
+	return b.take(now)
 }
 
 // Answer returns the answer to one request, or nil when there is none to give: a malformed request, one from
@@ -292,9 +332,22 @@ func (r *Responder) Answer(request []byte) []byte {
 		if !hmac.Equal(requestTag(k, challenge), tag) {
 			continue
 		}
+		// A request seen before (see stampMark) is answered from an allowance of its own: played back over and
+		// over, it must not use up what the device itself may ask.
+		fresh := true
+		if stamp, ok := challengeStamp(challenge); ok {
+			if stamp <= r.stamps[pub] {
+				fresh = false
+			} else {
+				r.stamps[pub] = stamp
+			}
+		}
 		// Counted only now that the sender proved to be this device: anybody in reach of the phone's Wi-Fi could
 		// otherwise use the allowance up with junk, and the paired devices would get no answer.
-		if !r.allow(pub, time.Now()) {
+		if fresh && !r.allow(pub, time.Now()) {
+			return nil
+		}
+		if !fresh && !r.repeats.take(time.Now()) {
 			return nil
 		}
 		info := *r.info
@@ -305,9 +358,11 @@ func (r *Responder) Answer(request []byte) []byte {
 		if err != nil {
 			return nil
 		}
-		r.asked[pub] = true
-		if r.info.Next != nil {
-			r.learned[pub] = true
+		if fresh {
+			r.asked[pub] = true
+			if r.info.Next != nil {
+				r.learned[pub] = true
+			}
 		}
 		nonce := make([]byte, nonceLen)
 		if _, err := rand.Read(nonce); err != nil {
@@ -351,8 +406,8 @@ func Ask(ctx context.Context, conn net.PacketConn, addr net.Addr, private, phone
 	if err != nil {
 		return Info{}, err
 	}
-	challenge := make([]byte, challengeLen)
-	if _, err := rand.Read(challenge); err != nil {
+	challenge, err := stampedChallenge(time.Now())
+	if err != nil {
 		return Info{}, err
 	}
 	request := append(append([]byte(magic), challenge...), requestTag(k, challenge)...)

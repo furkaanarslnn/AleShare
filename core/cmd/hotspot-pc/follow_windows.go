@@ -101,6 +101,12 @@ func applyFollow(set settings, info wifiinfo.Info) settings {
 		}
 	}
 	if next != set {
+		// This run read the settings a while ago; the window may have changed one since (auto-join). Only what
+		// this changes is written over the settings as they are now.
+		if cur, err := loadSettings(); err == nil {
+			cur.Profile, cur.Next = next.Profile, next.Next
+			next = cur
+		}
 		if err := saveSettings(next); err != nil {
 			logf("ayarlar yazılamadı: %v", err)
 			return set

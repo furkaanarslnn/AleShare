@@ -202,7 +202,7 @@ private fun ConnectPanel(saved: Join, state: ClientUiState, sharing: Boolean, ac
         ClientPhase.Searching -> "${saved.ssid} ağı yakına gelince kendiliğinden bağlanır. Android bağlanmak için onay isterse çıkan pencerede Bağlan'a dokun. Ağın adı değiştiyse aşağıdan Wi-Fi kodunu tara."
         ClientPhase.Connecting -> "${saved.ssid} ağına bağlanıldı, telefonun yanıtı bekleniyor."
         ClientPhase.Connected -> "Bu cihaz interneti paylaşan telefondan alıyor."
-        ClientPhase.Unreachable -> "Paylaşan telefonda paylaşımın açık olduğuna bak. Şimdilik kendi internetini kullanıyorsun; birazdan yeniden denenecek."
+        ClientPhase.Unreachable -> "Paylaşan telefonda paylaşımın açık olduğuna bak; birazdan yeniden denenecek."
       },
       style = MaterialTheme.typography.bodyMedium,
       color = MaterialTheme.colorScheme.onSurfaceVariant,

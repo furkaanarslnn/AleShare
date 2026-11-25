@@ -51,13 +51,17 @@ $letter = 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 
 subst "${letter}:" $root
 $script:drive = "${letter}:"
 $androidDir = "$script:drive\android"
-trap {
-  if ($script:drive) { subst $script:drive /d | Out-Null; $script:drive = $null }
-  # A release that did not come about gives its number back.
+# A release that did not come about gives its number back: on an error (the trap) and when the build is stopped
+# with Ctrl+C, which runs no trap but does run the finally blocks below.
+function Undo-Count {
   if ($script:versionBefore -and -not $script:released) {
     [IO.File]::WriteAllText($script:versionFile, $script:versionBefore, (New-Object Text.UTF8Encoding($false)))
     $script:versionBefore = $null
   }
+}
+trap {
+  if ($script:drive) { subst $script:drive /d | Out-Null; $script:drive = $null }
+  Undo-Count
   break
 }
 
@@ -80,6 +84,8 @@ if ($proxy) {
 }
 
 # Every release gets the next number, so it installs over the one before it on every device.
+# A release is built whole: an old core library beside a new number would ship unnoticed.
+if ($Release -and $SkipCore) { throw '-SkipCore cannot be used with -Release' }
 $versionFile = "$root\android\version.properties"
 $script:versionFile = $versionFile
 $releaseKey = "$root\android\keystore\release-ed25519.key"
@@ -100,6 +106,10 @@ if ($Release) {
   Write-Host "Release $name"
 }
 
+# From here on the number is counted: whatever ends the build before the APK is there gives it back (see
+# Undo-Count; the finally at the end of the Gradle step).
+$script:built = $false
+try {
 # What a user needs, in one place.
 $dist = "$root\dist"
 $apps = "$root\uygulama"
@@ -143,9 +153,13 @@ Push-Location $androidDir
 try {
   & .\gradlew.bat @tasks --console=plain
   if ($LASTEXITCODE) { throw "gradle failed ($LASTEXITCODE)" }
+  $script:built = $true
 } finally {
   Pop-Location
   if ($script:drive) { subst $script:drive /d | Out-Null; $script:drive = $null }
+}
+} finally {
+  if (-not $script:built) { Undo-Count }
 }
 
 if (-not $Release) {

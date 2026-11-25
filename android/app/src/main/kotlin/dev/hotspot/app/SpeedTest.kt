@@ -163,6 +163,7 @@ object SpeedTest {
       setRequestProperty("Content-Type", "application/json")
       try {
         outputStream.use { it.write("""{"speedtest":true}""".toByteArray()) }
+        if (responseCode == 429) error("telefon birkaç dakikada bir ölçüm yapar; biraz sonra yeniden dene")
         if (responseCode != HttpURLConnection.HTTP_OK) error("telefon $responseCode dedi")
       } finally {
         disconnect()

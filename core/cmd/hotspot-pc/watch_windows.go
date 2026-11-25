@@ -3,7 +3,8 @@ package main
 import (
 	"errors"
 	"fmt"
-	"runtime"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -26,13 +27,47 @@ const (
 	watchService   = "HotspotWatch"
 	watchEvery     = time.Minute
 	wlanLookEvery  = 3 * time.Second
-	wlanSettle     = 2 * time.Second // after a Wi-Fi change, before looking: Windows is still connecting
-	reconcileLimit = 3 * time.Minute // a run that takes longer is stuck: the service starts again
+	wlanSettle     = 2 * time.Second  // after a Wi-Fi change, before looking: Windows is still connecting
+	reconcileLimit = 3 * time.Minute  // a run that takes longer is stuck: the service starts again
+	stopWait       = 15 * time.Second // on Stop, how long a run under way may still take
 )
 
-// reconcileMutex keeps runs of reconcile apart across the machine (a variable for the tests, which may not make
-// global objects).
-var reconcileMutex = `Global\HotspotReconcile`
+// lockDir holds the files that keep runs of reconcile apart and say that a setup is under way: the private folder,
+// which only SYSTEM and the administrators can write to. (Named objects, as these were, could be made first by any
+// account of the computer, which then held the watcher still or hid a setup from it.) A variable for the tests.
+var lockDir = privateDir
+
+// reconcileWait is how long a run waits for another to finish; well within reconcileLimit, so that a run that only
+// waited is not taken for stuck.
+const reconcileWait = time.Minute
+
+// lockFile opens name in lockDir and locks it, trying until wait is over (0: once). It returns the unlock, or nil
+// when the file cannot be opened or stays locked.
+func lockFile(name string, wait time.Duration) func() {
+	f, err := os.OpenFile(filepath.Join(lockDir(), name), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil
+	}
+	h := windows.Handle(f.Fd())
+	deadline := time.Now().Add(wait)
+	for {
+		err := windows.LockFileEx(h, windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &windows.Overlapped{})
+		if err == nil {
+			var once sync.Once
+			return func() {
+				once.Do(func() {
+					_ = windows.UnlockFileEx(h, 0, 1, 0, &windows.Overlapped{})
+					f.Close()
+				})
+			}
+		}
+		if time.Now().After(deadline) {
+			f.Close()
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
 
 // What the Services list of Windows shows. The service's own name (watchService) keeps the program's old name, as
 // do its folder and its tunnel: an installation is found again by them.
@@ -41,49 +76,25 @@ const (
 	watchDescription = "Telefonun ağı görününce AleShare bağlantısını açar, ağdan çıkınca kapatır."
 )
 
-// setupMutex exists while a setup runs (a variable for the tests, which may not make global objects).
-var setupMutex = `Global\HotspotSetup`
-
 // holdSetup says, until resume is called or this process ends, that a setup is under way: the watcher service of
-// an installation that is being paired anew then leaves the tunnel alone (see cmdReconcile). A mark that goes
-// with the process cannot be left behind by a setup whose window was closed half-way.
+// an installation that is being paired anew then leaves the tunnel alone (see cmdReconcile). The mark is a lock on
+// a file, which Windows lifts when the process ends: a setup whose window was closed half-way leaves none behind.
 func holdSetup() (resume func()) {
-	name := windows.StringToUTF16Ptr(setupMutex)
-	var h windows.Handle
-	// As the administrators', which only a process with administrator rights can make: see setupRunning.
-	if sd, err := windows.SecurityDescriptorFromString("O:BAD:(A;;GA;;;SY)(A;;GA;;;BA)"); err == nil {
-		sa := windows.SecurityAttributes{SecurityDescriptor: sd}
-		sa.Length = uint32(unsafe.Sizeof(sa))
-		h, _ = windows.CreateMutex(&sa, false, name) // ERROR_ALREADY_EXISTS is fine
+	if unlock := lockFile("setup.lock", 0); unlock != nil {
+		return unlock
 	}
-	if h == 0 {
-		h, _ = windows.CreateMutex(nil, false, name) // without the rights (the tests): as its maker's
-	}
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			if h != 0 {
-				windows.CloseHandle(h)
-			}
-		})
-	}
+	return func() {}
 }
 
-// setupRunning reports whether a setup is under way in some process. Only a mark that belongs to the
-// administrators, SYSTEM or this process's own account counts: anybody can make an object of that name, and that
-// must not be a way to stop the watcher.
+// setupRunning reports whether a setup is under way in some process.
 func setupRunning() bool {
-	h, err := windows.OpenMutex(windows.SYNCHRONIZE|windows.READ_CONTROL, false, windows.StringToUTF16Ptr(setupMutex))
-	if err != nil {
-		return false
+	unlock := lockFile("setup.lock", 0)
+	if unlock == nil {
+		_, err := os.Stat(filepath.Join(lockDir(), "setup.lock"))
+		return err == nil // there, and locked by a setup
 	}
-	defer windows.CloseHandle(h)
-	sd, err := windows.GetSecurityInfo(h, windows.SE_KERNEL_OBJECT, windows.OWNER_SECURITY_INFORMATION)
-	if err != nil {
-		return false
-	}
-	owner, _, err := sd.Owner()
-	return err == nil && trustedOwner(owner)
+	unlock()
+	return false
 }
 
 // inService says this process is the watcher service (an upgrade it runs itself is taken up by a restart).
@@ -129,7 +140,15 @@ func (watcher) Execute(_ []string, requests <-chan svc.ChangeRequest, status cha
 			case svc.Interrogate:
 				status <- r.CurrentStatus
 			case svc.Stop, svc.Shutdown:
-				status <- svc.Status{State: svc.StopPending}
+				status <- svc.Status{State: svc.StopPending, WaitHint: uint32(stopWait / time.Millisecond)}
+				// A run under way may be installing a release: it gets a moment to finish rather than be cut off
+				// half-way (see installSelf, which never leaves the program missing either way).
+				if done != nil {
+					select {
+					case <-done:
+					case <-time.After(stopWait):
+					}
+				}
 				return false, 0
 			}
 		case <-done:
@@ -161,24 +180,13 @@ func (watcher) Execute(_ []string, requests <-chan svc.ChangeRequest, status cha
 }
 
 // lockReconcile keeps two runs of reconcile from overlapping (the service, and someone running it by hand); it
-// returns the unlock. Without the lock (another account made it, access denied) the run goes on regardless.
+// returns the unlock. Without the lock (not installed yet, or another run holds it past reconcileWait) the run
+// goes on regardless.
 func lockReconcile() func() {
-	runtime.LockOSThread()                                                            // a mutex is released by the thread that holds it
-	h, _ := windows.CreateMutex(nil, false, windows.StringToUTF16Ptr(reconcileMutex)) // ERROR_ALREADY_EXISTS is fine
-	if h == 0 {
-		runtime.UnlockOSThread()
-		return func() {}
+	if unlock := lockFile("reconcile.lock", reconcileWait); unlock != nil {
+		return unlock
 	}
-	if ev, _ := windows.WaitForSingleObject(h, uint32(reconcileLimit/time.Millisecond)); ev != windows.WAIT_OBJECT_0 && ev != windows.WAIT_ABANDONED {
-		windows.CloseHandle(h)
-		runtime.UnlockOSThread()
-		return func() {}
-	}
-	return func() {
-		windows.ReleaseMutex(h)
-		windows.CloseHandle(h)
-		runtime.UnlockOSThread()
-	}
+	return func() {}
 }
 
 // wlanStates sums up the Wi-Fi adapters' connection states; it changes when one connects or disconnects. It asks

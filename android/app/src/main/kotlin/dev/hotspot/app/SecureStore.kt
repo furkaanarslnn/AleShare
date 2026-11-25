@@ -22,7 +22,7 @@ object SecureStore {
   internal const val CORE_ENTRY = "core"
   private const val IV_SIZE = 12
   private const val TRIES = 3
-  private const val PAUSE_MILLIS = 250L
+  private const val PAUSE_MILLIS = 100L
   private const val LOST = ".lost"
 
   /** Entries that are there but could not be decrypted in this run of the app. */
@@ -41,16 +41,28 @@ object SecureStore {
   }
 
   /**
-   * The key for writing: the one there is, or a new one when there is none. When something was saved before
-   * ([hasEntries]) a missing key is asked for a few times first: a key made under the same name puts the old one,
-   * and everything saved with it, out of reach for good, and the keystore may only be slow to answer.
+   * The key for writing: the one there is, or a new one when the keystore says for certain that there is none. A key
+   * made under the same name puts the old one, and everything saved with it, out of reach for good; so a keystore
+   * that fails to answer, or holds the name but will not hand the key over, gets no new key: writing fails instead,
+   * and what was saved stays readable for the day the keystore answers again.
    */
-  private fun keyForWriting(hasEntries: Boolean): SecretKey {
+  private fun keyForWriting(): SecretKey {
+    var problem: Exception? = null
     for (n in 0 until TRIES) {
-      runCatching { existingKey() }.getOrNull()?.let { return it }
-      if (!hasEntries) break
-      Thread.sleep(PAUSE_MILLIS)
+      try {
+        val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (ks.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
+        if (!ks.containsAlias(KEY_ALIAS)) return newKey()
+        problem = IllegalStateException("the key is there but cannot be used")
+      } catch (e: Exception) {
+        problem = e
+      }
+      if (n + 1 < TRIES) Thread.sleep(PAUSE_MILLIS)
     }
+    throw IllegalStateException("the keystore does not hand out the key", problem)
+  }
+
+  private fun newKey(): SecretKey {
     val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
     gen.init(
       KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
@@ -98,17 +110,24 @@ object SecureStore {
     return null
   }
 
-  fun put(context: Context, entry: String, text: String) {
+  /** Saves [text] as [entry]; false when the keystore cannot be used now (nothing is changed then). */
+  fun put(context: Context, entry: String, text: String): Boolean {
     val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-    cipher.init(Cipher.ENCRYPT_MODE, keyForWriting(hasEntries = prefs.all.isNotEmpty()))
-    val out = cipher.iv + cipher.doFinal(text.toByteArray(Charsets.UTF_8))
+    val out = try {
+      val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+      cipher.init(Cipher.ENCRYPT_MODE, keyForWriting())
+      cipher.iv + cipher.doFinal(text.toByteArray(Charsets.UTF_8))
+    } catch (e: Exception) {
+      Log.w(TAG, "could not save '$entry'", e)
+      return false
+    }
     val edit = prefs.edit()
     // What could not be read is put aside, not written over: should it read again one day, it can come back (see
     // [lost]).
     if (entry in unreadable) prefs.getString(entry, null)?.let { edit.putString(entry + LOST, it) }
     edit.putString(entry, Base64.encodeToString(out, Base64.NO_WRAP)).commit()
     unreadable.remove(entry)
+    return true
   }
 
   fun remove(context: Context, entry: String) {

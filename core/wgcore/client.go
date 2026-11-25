@@ -63,6 +63,9 @@ type ClientTunnel struct{ t *vpnclient.Tunnel }
 // Stop takes the tunnel down and closes the device it ran on.
 func (c *ClientTunnel) Stop() { c.t.Close() }
 
+// Rekey starts a handshake with the phone now: for a device that woke from a long sleep (see vpnclient.Tunnel.Rekey).
+func (c *ClientTunnel) Rekey() { c.t.Rekey() }
+
 // RxBytes is what came in through the tunnel.
 func (c *ClientTunnel) RxBytes() int64 { return c.stats().Rx }
 

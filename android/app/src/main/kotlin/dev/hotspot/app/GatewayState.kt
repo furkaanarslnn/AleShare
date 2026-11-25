@@ -30,8 +30,11 @@ fun bandLabel(mhz: Int): String? = when (mhz) {
   else -> null
 }
 
-/** [waitingFor]: the devices connected when the change began; [learned]: those of them that know the new network. */
-data class WifiChange(val ssid: String, val waitingFor: List<String>, val learned: List<String>)
+/**
+ * [waitingFor]: the devices connected when the change began; [learned]: those of them that know the new network;
+ * [passwordOnly]: the name stays, only the password changes.
+ */
+data class WifiChange(val ssid: String, val waitingFor: List<String>, val learned: List<String>, val passwordOnly: Boolean = false)
 
 object GatewayState {
   private val _state = MutableStateFlow(GatewayUiState())
