@@ -141,20 +141,25 @@ func (f *flowSet) add(client netip.Addr, fl *flow) (remove func()) {
 	}
 }
 
-// dialCount counts the connections being opened per client.
+// dialCount counts what each client has under way (connections being opened, pings waiting).
 type dialCount struct {
-	mu sync.Mutex
-	m  map[netip.Addr]int
+	mu    sync.Mutex
+	m     map[netip.Addr]int
+	limit int // per client; 0 means maxClientDialing
 }
 
-// begin counts one more connection being opened for client; false when it has as many as it may.
+// begin counts one more for client; false when it has as many as it may.
 func (d *dialCount) begin(client netip.Addr) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.m == nil {
 		d.m = map[netip.Addr]int{}
 	}
-	if d.m[client] >= maxClientDialing {
+	limit := d.limit
+	if limit == 0 {
+		limit = maxClientDialing
+	}
+	if d.m[client] >= limit {
 		return false
 	}
 	d.m[client]++

@@ -307,12 +307,14 @@ func (c *Core) Start(port int, protector Protector) error {
 	}
 	var dialer gateway.Dialer
 	var dohDialer doh.Dialer
+	var pinger gateway.Pinger // pings to the internet go out over the mobile network only (nil: dropped)
 	probe := &ipv6Probe{dialer: &net.Dialer{}}
 	// The releases for paired devices; without its Wi-Fi socket (port taken) the tunnel's way still works.
 	tcpServices := c.startUpdates()
 	if protector != nil {
 		dialer = protectedDialer{protector}
 		dohDialer = protectedDialer{protector}
+		pinger = protectedDialer{protector}
 		probe.dialer = protectedDialer{protector}
 	}
 	srv, err := server.Start(server.Config{
@@ -323,6 +325,7 @@ func (c *Core) Start(port int, protector Protector) error {
 			MTU:    provision.TunnelMTU,
 			Addrs:  []netip.Addr{provision.GatewayV4, provision.GatewayV6},
 			Dialer: dialer,
+			Pinger: pinger,
 			// The clients' names are looked up over HTTPS; c.dns is the plain last resort.
 			Resolver:    doh.New(dohDialer, doh.DefaultServers, c.dns, nil),
 			DNSUpstream: c.dns,
@@ -518,19 +521,17 @@ func active(st server.PeerStat, seen rxSeen, now time.Time, window time.Duration
 
 // PairingListener is implemented by the app to take part in a pairing.
 type PairingListener interface {
-	// Approve is called when a computer asks to join. sas is the six-digit number
-	// the computer shows as well; the user must compare them. It blocks until the
-	// user has decided and returns true to admit the computer.
+	// Approve was asked about a computer that paired by comparing a number. That way is gone (see
+	// internal/pairing); it is never called, and stays only so that the app's side keeps its shape.
 	Approve(name, sas string) bool
 	// Paired is called after a computer was added. The app must persist StateJSON().
 	Paired(name string)
 }
 
 // StartPairing opens a pairing window on TCP port 51821 for three minutes. A
-// computer on the same network can then join with its own key pair, and no secret
-// crosses the network: the user compares its six-digit number, or the computer's
-// QR code was scanned (ExpectComputer) and it joins without a question. The window
-// closes after one pairing.
+// computer on the same network whose QR code was scanned (ExpectComputer) can then
+// join with its own key pair; no secret crosses the network. The window closes
+// after one pairing.
 func (c *Core) StartPairing(l PairingListener) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -550,7 +551,7 @@ func (c *Core) startPairing(addr string, l PairingListener) error {
 		}
 	}
 	e := enroller{c: c, l: l}
-	srv, err := pairing.Listen(addr, e, e, pairing.DefaultWindow)
+	srv, err := pairing.Listen(addr, e, pairing.DefaultWindow)
 	if err != nil {
 		return err
 	}
@@ -625,8 +626,6 @@ func (e enroller) ServerPublicKey() wgkey.Key {
 	defer e.c.mu.Unlock()
 	return e.c.state.ServerPublicKey()
 }
-
-func (e enroller) Approve(name, sas string) bool { return e.l.Approve(name, sas) }
 
 func (e enroller) Enroll(name string, public wgkey.Key) (pairing.Grant, error) {
 	e.c.mu.Lock()

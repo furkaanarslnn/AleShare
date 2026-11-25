@@ -2,8 +2,8 @@ package wgcore
 
 import (
 	"context"
-	"errors"
 	"net"
+	"net/http"
 	"net/netip"
 	"runtime"
 	"runtime/debug"
@@ -168,13 +168,16 @@ func TestPairingEnrollsAComputer(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	var shown string
-	res, err := pairing.Pair(ctx, c.pairing.Addr(), "DESKTOP-TEST", func(sas string) { shown = sas })
+	priv, code, err := pairing.NewQR()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := <-l.sas; got != shown {
-		t.Fatalf("numbers differ: phone %q, computer %q", got, shown)
+	if err := c.ExpectComputer(code.String()); err != nil {
+		t.Fatal(err)
+	}
+	res, err := pairing.PairQR(ctx, c.pairing.Addr(), "DESKTOP-TEST", priv, code)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if got := <-l.paired; got != "DESKTOP-TEST" {
 		t.Fatalf("Paired(%q)", got)
@@ -199,23 +202,25 @@ func TestPairingEnrollsAComputer(t *testing.T) {
 	}
 }
 
-func TestPairingRefusedLeavesNoTrace(t *testing.T) {
+// A computer that asks to pair by comparing numbers (the way of releases before QR pairing) is turned away and
+// leaves nothing behind.
+func TestNumberPairingIsRefused(t *testing.T) {
 	c, _ := NewCore("")
-	l := &fakeListener{approve: false, sas: make(chan string, 1), paired: make(chan string, 1)}
+	l := &fakeListener{approve: true, sas: make(chan string, 1), paired: make(chan string, 1)}
 	if err := c.startPairing("127.0.0.1:0", l); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if _, err := pairing.Pair(ctx, c.pairing.Addr(), "intruder", func(string) {}); !errors.Is(err, pairing.ErrDenied) {
-		t.Fatalf("err = %v", err)
+	resp, err := http.Post("http://"+c.pairing.Addr()+"/v1/hello", "application/json", strings.NewReader(`{"name":"old","commit":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="}`))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if c.PeerNames() != "" {
-		t.Fatalf("peers = %q", c.PeerNames())
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusGone || c.PeerNames() != "" {
+		t.Fatalf("status %d, peers %q", resp.StatusCode, c.PeerNames())
 	}
 	select {
-	case n := <-l.paired:
-		t.Fatalf("Paired(%q) after a refusal", n)
+	case <-l.sas:
+		t.Fatal("the user was asked to compare a number")
 	default:
 	}
 }

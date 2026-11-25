@@ -381,4 +381,17 @@ class LogicTest {
     assertTrue("much sent, nothing back for long", phoneSilent(30, now, 0, 0, 64 * 1024, now - 30_000))
     assertFalse("no first handshake yet, opened a moment ago", phoneSilent(-1, now, now - 5_000, 0, 0, now))
   }
+
+  // A phone without Google Play services reads QR codes from a photo: a computer's pairing code, drawn small in a
+  // larger picture with a margin, is found.
+  @Test
+  fun aQrCodeIsReadFromAPicture() {
+    val text = "HSPC2:" + "A".repeat(64)
+    val matrix = com.google.zxing.qrcode.QRCodeWriter().encode(text, com.google.zxing.BarcodeFormat.QR_CODE, 300, 300)
+    val (w, h) = 600 to 500
+    val pixels = IntArray(w * h) { 0xFFFFFFFF.toInt() }
+    for (y in 0 until 300) for (x in 0 until 300) if (matrix[x, y]) pixels[(y + 100) * w + x + 150] = 0xFF000000.toInt()
+    assertEquals(text, QrPhoto.decodePixels(w, h, pixels))
+    assertNull("an empty picture", QrPhoto.decodePixels(w, h, IntArray(w * h) { 0xFFFFFFFF.toInt() }))
+  }
 }

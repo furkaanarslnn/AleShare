@@ -355,6 +355,12 @@ footer .note svg { margin-top: 1px; }
       <button class="text-btn" id="upgrade-btn">Kur</button>
     </div>
 
+    <div class="banner warn" id="location" hidden style="margin-bottom:12px">
+      <svg class="i"><use href="#alert"/></svg>
+      <div class="grow">Windows'ta konum izni kapalı olduğu için yakındaki Wi-Fi ağları görünmüyor; bilgisayar telefonun ağına kendiliğinden geçemiyor. Konum hizmetlerini ve masaüstü uygulamalarının konum erişimini açın.</div>
+      <button class="text-btn" id="location-btn">Ayarları aç</button>
+    </div>
+
     <div class="banner info" id="online" hidden style="margin-bottom:12px">
       <svg class="i"><use href="#download"/></svg>
       <div class="grow" id="online-text"></div>
@@ -444,6 +450,7 @@ const api = live ? {
   boot: () => window.hsBoot(), startSetup: () => window.hsStartSetup(), answer: (v, ok) => window.hsAnswer(v, ok),
   setAutoJoin: (on) => window.hsSetAutoJoin(on), upgrade: () => window.hsUpgrade(), uninstall: () => window.hsUninstall(),
   connect: () => window.hsConnect(), openLog: () => window.hsOpenLog(), phone: (c) => window.hsPhone(c),
+  openLocation: () => window.hsOpenLocation(),
   speedTest: () => window.hsSpeedTest(), online: () => window.hsOnline(), checkOnline: () => window.hsCheckOnline(),
 } : preview();
 
@@ -612,6 +619,7 @@ function render() {
       ? `AleShare <b>${esc(on.name)}</b> indiriliyor ve kuruluyor…`
       : `AleShare <b>${esc(on.name)}</b> yayımlandı (${bytes(on.size)}).`;
   }
+  $("location").hidden = !state.locationOff;
   $("check-btn").disabled = checking;
   $("check-btn").textContent = checking ? "Bakılıyor…" : "Şimdi denetle";
   $("d-check-caption").textContent = (state.onlineChecked ? "Son bakış: " + state.onlineChecked + ". " : "") + "Program birkaç saatte bir kendiliğinden de bakar.";
@@ -702,15 +710,6 @@ function showQR(svg) {
     <div class="waiting"><span class="spinner"></span>Telefonun okuması bekleniyor</div>`;
 }
 
-function showNumber(sas) {
-  const ask = $("ask");
-  ask.hidden = false;
-  ask.innerHTML = `<h3>Numarayı karşılaştır</h3>
-    <p class="muted">Telefondaki AleShare eski bir sürüm; QR yerine numarayla eşleşiliyor.</p>
-    <div class="sas">${esc(sas.slice(0, 3))} ${esc(sas.slice(3))}</div>
-    <p class="muted">Telefonda aynı numara görünüyorsa <b>Eşleştir</b>'e, farklıysa <b>Reddet</b>'e dokun.</p>`;
-}
-
 // ---- events from the Go side ----
 window.hsEvent = (e) => {
   switch (e.type) {
@@ -728,7 +727,6 @@ window.hsEvent = (e) => {
     case "password": if (setup) setup.steps.wifi = { state: "active", detail: e.ssid + " ağının parolası gerekiyor" }; askPassword(e.ssid, e.retry); break;
     case "choose": askChoice(e.detail, e.options); break;
     case "qr": if (setup) setup.steps.pair = { state: "active", detail: "Kodu telefonun kamerasıyla okut" }; showQR(e.svg); break;
-    case "number": showNumber(e.detail); break;
     case "finished": if (setup) { setup.ending = "finished"; } break;
     case "failed":
       if (setup) {
@@ -799,6 +797,7 @@ $("uninstall").onclick = () => { $("confirm").hidden = false; };
 $("confirm-no").onclick = () => { $("confirm").hidden = true; };
 $("confirm-yes").onclick = () => { $("confirm").hidden = true; act(api.uninstall); };
 $("open-log").onclick = () => api.openLog();
+$("location-btn").onclick = () => api.openLocation();
 for (const [toggle, body] of [["adv-toggle", "adv"], ["ph-settings-toggle", "ph-settings"]]) {
   $(toggle).onclick = () => {
     const open = $(body).hidden;
@@ -868,6 +867,7 @@ function preview() {
     uninstall: async () => { await later(); window.hsEvent({ type: "state", state: { ...base, installed: false } }); window.hsEvent({ type: "action", action: "uninstall" }); },
     connect: async () => {},
     openLog: async () => {},
+    openLocation: async () => {},
     checkOnline: async () => { await later(); await later(); base.onlineChecked = "13.11.2026 07:10"; window.hsEvent({ type: "state", state: base }); window.hsEvent({ type: "action", action: "check", detail: "AleShare güncel." }); },
     phone: async (c) => {
       await later();

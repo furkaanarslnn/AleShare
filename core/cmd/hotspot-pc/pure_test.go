@@ -256,3 +256,20 @@ func TestBuildConf(t *testing.T) {
 		t.Fatal("no pre-shared key may be configured")
 	}
 }
+
+// netsh's refusal for lack of the location permission is told from a list of networks, in English or Turkish.
+func TestLocationBlocked(t *testing.T) {
+	refused := []string{
+		"Network shell commands need location permission to access WLAN information. Turn on Location services on the Location page in Privacy & security settings.\r\n\r\nHere is the URI for the Location page in the Settings app:\r\nms-settings:privacy-location",
+		"Ağ kabuğu komutlarının WLAN bilgilerine erişmesi için konum izni gerekir.",
+	}
+	for _, out := range refused {
+		if !locationBlocked(out) {
+			t.Errorf("not recognised: %q", out[:40])
+		}
+	}
+	list := "Interface name : Wi-Fi\r\nThere are 2 networks currently visible.\r\n\r\nSSID 1 : DIRECT-Ab\r\n    Network type            : Infrastructure\r\n"
+	if locationBlocked(list) {
+		t.Error("a list of networks taken for a refusal")
+	}
+}

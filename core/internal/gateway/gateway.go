@@ -109,6 +109,8 @@ type Options struct {
 	Addrs []netip.Addr
 	// Dialer opens outgoing sockets. Defaults to a plain net.Dialer.
 	Dialer Dialer
+	// Pinger answers the clients' pings to the internet (see ping.go); nil drops them.
+	Pinger Pinger
 	// Resolver answers every DNS query (UDP or TCP, port 53) that a client sends,
 	// to one of Addrs or to any other server: devices with a server of their own
 	// built in (8.8.8.8 in TVs and streaming sticks) get answers too, encrypted
@@ -209,6 +211,7 @@ type Gateway struct {
 	stats   counters
 	flows   flowSet   // the flows under way per client, for CutClient
 	dialing dialCount // connections being opened per client
+	pings   dialCount // echo requests waiting for their reply, per client
 	usage   usage     // the bytes per client, for ClientBytes
 	prio    *priority // see Options.Priority
 }
@@ -244,6 +247,7 @@ func New(opts Options) (*Gateway, error) {
 		wake:   make(chan struct{}, 1),
 		done:   make(chan struct{}),
 		prio:   &priority{on: opts.Priority},
+		pings:  dialCount{limit: maxClientPings},
 	}
 	// Whatever arrives from a client was authenticated by WireGuard, so checking
 	// its TCP/UDP checksums again would only burn CPU.
@@ -955,6 +959,9 @@ func (g *Gateway) Write(bufs [][]byte, offset int) (int, error) {
 		packet := buf[offset:]
 		if len(packet) == 0 {
 			continue
+		}
+		if g.echo(packet) {
+			continue // a ping to the internet: answered through Options.Pinger
 		}
 		pkb := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(packet)})
 		switch packet[0] >> 4 {

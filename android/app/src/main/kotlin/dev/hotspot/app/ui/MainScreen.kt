@@ -75,6 +75,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -111,6 +112,7 @@ import dev.hotspot.app.limitLabel
 import dev.hotspot.app.GatewayState
 import dev.hotspot.app.GatewayUiState
 import dev.hotspot.app.JoinInbox
+import dev.hotspot.app.QrPhoto
 import dev.hotspot.app.LocalAddress
 import dev.hotspot.app.PairingBridge
 import dev.hotspot.app.TrafficStats
@@ -130,6 +132,7 @@ import dev.hotspot.wgcore.Core
 import dev.hotspot.wgcore.Join
 import dev.hotspot.wgcore.Wgcore
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.Canvas
@@ -436,6 +439,32 @@ fun MainScreen() {
     }
     startWhenWifiUntil = 0L
   }
+  // QR codes: Google's scanner where Google Play services are there, else a photo from the phone's own camera app
+  // that the app reads itself (QrPhoto). Without the second way a phone without those services could not add a
+  // computer at all.
+  val scope = rememberCoroutineScope()
+  var photoScan by remember { mutableStateOf<((String) -> Unit)?>(null) }
+  val photo = remember { QrPhoto.uri(context) }
+  val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { taken ->
+    val onText = photoScan
+    photoScan = null
+    if (taken && onText != null) {
+      scope.launch {
+        val text = withContext(Dispatchers.Default) { QrPhoto.decode(context, photo) }
+        if (text != null) onText(text)
+        else problem = "Fotoğrafta QR kod bulunamadı. Kodu ortaya alıp yakından, net bir fotoğraf çekerek yeniden dene."
+      }
+    }
+  }
+  val scan: ((String) -> Unit) -> Unit = { onText ->
+    scanLink(context, onLink = onText, onUnavailable = {
+      photoScan = onText
+      runCatching { takePhoto.launch(photo) }.onFailure {
+        photoScan = null
+        problem = "QR kodu okutacak bir kamera uygulaması bulunamadı. Bağlantıyı yapıştırmayı dene."
+      }
+    })
+  }
   // Joining another phone's network: the system asks once for the right to be a VPN, and for notifications.
   val vpnConsent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
     if (it.resultCode == Activity.RESULT_OK) ClientService.start(context)
@@ -631,9 +660,7 @@ fun MainScreen() {
               sharing = state.running || state.starting,
               supported = Build.VERSION.SDK_INT >= 29,
               onScan = {
-                scanLink(
-                  context,
-                  onLink = { link ->
+                scan { link ->
                     val wifiCode = WifiNetwork.parseQr(link)
                     when {
                       wifiCode == null -> handleLink(link, onJoin = { pendingJoin = it; pendingLink = link }, onProblem = { problem = it })
@@ -646,9 +673,7 @@ fun MainScreen() {
                       }
                       else -> problem = "Bu yalnızca bir Wi-Fi kodu. Önce paylaşan telefonda Cihazlar → Ekle → Telefon veya tablet ile çıkan AleShare kodunu okut."
                     }
-                  },
-                  onProblem = { problem = it },
-                )
+                }
               },
               onPaste = { showPaste = true },
               onConnect = connect,
@@ -737,16 +762,12 @@ fun MainScreen() {
       sharing = state.running,
       onComputer = {
         showSheet = false
-        scanLink(
-          context,
-          onLink = { text ->
-            // The computer keeps asking; from now on the phone admits it through any pairing window it opens.
-            runCatching { core.expectComputer(text) }
-              .onSuccess { waitingComputer = true }
-              .onFailure { problem = "Bu, bilgisayarın eşleşme kodu değil. Bilgisayarda AleShare.exe'nin gösterdiği QR kodu okut." }
-          },
-          onProblem = { problem = it },
-        )
+        scan { text ->
+          // The computer keeps asking; from now on the phone admits it through any pairing window it opens.
+          runCatching { core.expectComputer(text) }
+            .onSuccess { waitingComputer = true }
+            .onFailure { problem = "Bu, bilgisayarın eşleşme kodu değil. Bilgisayarda AleShare.exe'nin gösterdiği QR kodu okut." }
+        }
       },
       onPhone = {
         showSheet = false
@@ -951,12 +972,14 @@ private fun handleLink(text: String, onJoin: (Join) -> Unit, onProblem: (String)
   }
 }
 
-/** The system's QR scanner (Google Play services): needs no camera permission of ours. */
-private fun scanLink(context: Context, onLink: (String) -> Unit, onProblem: (String) -> Unit) {
+/** The system's QR scanner (Google Play services): needs no camera permission of ours. [onUnavailable] when it cannot run. */
+private fun scanLink(context: Context, onLink: (String) -> Unit, onUnavailable: () -> Unit) {
   val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
-  GmsBarcodeScanning.getClient(context, options).startScan()
-    .addOnSuccessListener { barcode -> barcode.rawValue?.let(onLink) }
-    .addOnFailureListener { onProblem("QR tarayıcı açılamadı. Bağlantıyı yapıştırmayı dene.") }
+  runCatching {
+    GmsBarcodeScanning.getClient(context, options).startScan()
+      .addOnSuccessListener { barcode -> barcode.rawValue?.let(onLink) }
+      .addOnFailureListener { onUnavailable() } // no Google Play services, or their scanner cannot run here
+  }.onFailure { onUnavailable() }
 }
 
 /**

@@ -100,44 +100,7 @@ func waitFor(limit time.Duration, ready func() bool) bool {
 	}
 }
 
-// waitForPairingWindow waits until the phone accepts pairing requests. It does so while the app is open on
-// the screen with sharing on; a connection that is only tried and closed counts for nothing there.
-func waitForPairingWindow(ui setupUI, phoneIP string) error {
-	addr := net.JoinHostPort(phoneIP, strconv.Itoa(pairing.Port))
-	announced := false
-	ok := waitFor(5*time.Minute, func() bool {
-		c, err := net.DialTimeout("tcp", addr, 2*time.Second)
-		if err == nil {
-			c.Close()
-			return true
-		}
-		if !announced {
-			ui.Step(stepPair, "Telefonda AleShare uygulamasını aç, paylaşımı başlat ve uygulamayı ekranda açık tut.")
-			announced = true
-		}
-		return false
-	})
-	if !ok {
-		return errors.New("telefon eşleşme isteği kabul etmiyor (uygulama açık ve paylaşım başlamış mı?)")
-	}
-	return nil
-}
-
-// runPairing pairs by comparing six digits, the way of a phone app older than QR pairing.
-func runPairing(ui setupUI, phoneIP, name string) (*pairing.Result, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), pairing.DefaultWindow)
-	defer cancel()
-	res, err := pairing.Pair(ctx, net.JoinHostPort(phoneIP, strconv.Itoa(pairing.Port)), name, ui.Number)
-	if errors.Is(err, pairing.ErrDenied) {
-		return nil, errors.New("telefonda reddedildi")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("%w\n(telefonda AleShare uygulaması ekranda açık ve paylaşım başlamış mı, aynı ağda mısın?)", err)
-	}
-	return res, nil
-}
-
-// cmdPair pairs and writes a configuration, nothing more: no installation.
+// cmdPair pairs (the phone scans the code shown here) and writes a configuration, nothing more: no installation.
 func cmdPair(args []string) error {
 	fs := flag.NewFlagSet("pair", flag.ContinueOnError)
 	phone := fs.String("phone", "", "telefonun IP adresi (varsayılan: bağlı ağın ağ geçidi)")
@@ -150,7 +113,7 @@ func cmdPair(args []string) error {
 	if err != nil {
 		return err
 	}
-	res, err := runPairing(consoleUI{}, ip, *name)
+	res, err := runQRPairing(consoleUI{}, ip, *name)
 	if err != nil {
 		return err
 	}
@@ -267,13 +230,23 @@ func joinPhoneWifi(ui setupUI) (phone, profile string, err error) {
 	deadline := time.Now().Add(10 * time.Minute)
 	retry := false
 	failed := map[string]int{} // how often the profile Windows had for a network did not get this computer onto it
+	askedLocation := false     // the location settings were opened once
 	for time.Now().Before(deadline) {
 		if phone, profile, ok := onPhoneNetwork(); ok {
 			return phone, profile, nil
 		}
 		_ = scanWifi()
 		time.Sleep(4 * time.Second) // the scan answers asynchronously
-		out, _ := command("netsh.exe", "wlan", "show", "networks").Output()
+		out, _ := command("netsh.exe", "wlan", "show", "networks").CombinedOutput()
+		if locationBlocked(string(out)) {
+			if !askedLocation {
+				askedLocation = true
+				openLocationSettings()
+			}
+			ui.Step(stepWifi, locationHint)
+			time.Sleep(3 * time.Second)
+			continue
+		}
 		found := phoneNetworks(parseVisibleSSIDs(string(out)))
 		if len(found) == 0 {
 			time.Sleep(3 * time.Second)
@@ -319,8 +292,7 @@ func joinPhoneWifi(ui setupUI) (phone, profile string, err error) {
 	return "", "", errors.New("10 dakika içinde telefonun ağına bağlanılamadı")
 }
 
-// runQRPairing shows this computer's pairing code and waits until the phone has scanned it. A phone whose app
-// is older than QR pairing is paired by comparing numbers instead.
+// runQRPairing shows this computer's pairing code and waits until the phone has scanned it.
 func runQRPairing(ui setupUI, phoneIP, name string) (*pairing.Result, error) {
 	priv, code, err := pairing.NewQR()
 	if err != nil {
@@ -338,11 +310,8 @@ func runQRPairing(ui setupUI, phoneIP, name string) (*pairing.Result, error) {
 		case err == nil:
 			return res, nil
 		case errors.Is(err, pairing.ErrNoQR):
-			ui.Step(stepPair, "Telefondaki AleShare QR ile eşleşmeyi bilmiyor (eski sürüm); numarayla eşleşiliyor.")
-			if err := waitForPairingWindow(ui, phoneIP); err != nil {
-				return nil, err
-			}
-			return runPairing(ui, phoneIP, name)
+			// Numbers are no longer compared (see internal/pairing): an app that old is updated first.
+			return nil, errors.New("telefondaki AleShare çok eski ve QR kodla eşleşmeyi bilmiyor: telefonda AleShare'i güncelleyip yeniden deneyin")
 		case errors.Is(err, pairing.ErrNotScanned):
 			// The app is open: waiting for the camera.
 		default:
@@ -761,8 +730,15 @@ func joinPhoneNetwork(set settings) {
 			return
 		}
 	}
-	out, err := command("netsh.exe", "wlan", "show", "networks").Output()
-	if err != nil {
+	out, err := command("netsh.exe", "wlan", "show", "networks").CombinedOutput()
+	if off := locationBlocked(string(out)); off != h.LocationOff {
+		h.LocationOff = off
+		saveHealth(h)
+		if off {
+			logf("Windows'ta konum izni kapalı: yakındaki Wi-Fi ağları görünmüyor, telefonun ağına kendiliğinden geçilemez")
+		}
+	}
+	if err != nil || h.LocationOff {
 		return
 	}
 	ssid, ok := phoneSSID(parseVisibleSSIDs(string(out)), set.Profile, set.Next)
@@ -1224,4 +1200,13 @@ func cmdUninstall(args []string) error {
 	say("Kaldırıldı. WireGuard for Windows'a dokunulmadı (isteyen Ayarlar'dan kaldırır).")
 	say("Telefonda AleShare uygulamasından bu bilgisayarı \"Kaldır\" ile silmeyi unutma.")
 	return q.finish(nil)
+}
+
+// locationHint says what to do when Windows hides the Wi-Fi networks around (see locationBlocked).
+const locationHint = "Windows konum izni kapalı olduğu için yakındaki Wi-Fi ağlarını göstermiyor. Açılan Ayarlar sayfasında " +
+	"Konum hizmetlerini ve \"Masaüstü uygulamalarının konumunuza erişmesine izin ver\" seçeneğini açın; AleShare kendiliğinden devam eder."
+
+// openLocationSettings opens Windows' location settings, where the user allows the computer's location.
+func openLocationSettings() {
+	_ = exec.Command(sysPath("explorer.exe"), "ms-settings:privacy-location").Start()
 }

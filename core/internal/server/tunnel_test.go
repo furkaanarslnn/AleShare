@@ -423,3 +423,52 @@ func TestCleanEndStaysClean(t *testing.T) {
 		t.Fatalf("got %d of %d bytes, %v", len(got), len(body), err)
 	}
 }
+
+// fakePinger answers every ping to the addresses it knows, and none to the others.
+type fakePinger struct{ up map[netip.Addr]bool }
+
+func (p fakePinger) Ping(ctx context.Context, dst netip.Addr, payload []byte) error {
+	if p.up[dst] {
+		return nil
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// A client's ping to the internet is answered (through the phone's own ping), with its identifier, sequence and
+// data; one to an address that does not answer gets nothing back.
+func TestPingThroughTheGateway(t *testing.T) {
+	up := netip.MustParseAddr("203.0.113.9")
+	tn := newTunnel(t, &fakeDialer{seen: make(chan string, 16)}, gateway.Options{Pinger: fakePinger{up: map[netip.Addr]bool{up: true}}})
+	ping := func(dst netip.Addr, wait time.Duration) ([]byte, error) {
+		c, err := tn.tnet.DialPingAddr(netip.Addr{}, dst)
+		if err != nil {
+			return nil, err
+		}
+		defer c.Close()
+		req := []byte{8, 0, 0, 0, 0x12, 0x34, 0, 7, 'a', 'l', 'e', 's', 'h', 'a', 'r', 'e'}
+		if _, err := c.Write(req); err != nil {
+			return nil, err
+		}
+		c.SetReadDeadline(time.Now().Add(wait))
+		buf := make([]byte, 1500)
+		n, err := c.Read(buf)
+		return buf[:n], err
+	}
+	var got []byte
+	var err error
+	for i := 0; i < 10; i++ { // the first may go before the tunnel's handshake is done
+		if got, err = ping(up, 2*time.Second); err == nil {
+			break
+		}
+	}
+	if err != nil {
+		t.Fatalf("no reply: %v", err)
+	}
+	if len(got) < 16 || got[0] != 0 || string(got[8:16]) != "aleshare" {
+		t.Fatalf("reply %x", got)
+	}
+	if _, err := ping(netip.MustParseAddr("203.0.113.10"), 1500*time.Millisecond); err == nil {
+		t.Fatal("an address that does not answer was answered")
+	}
+}

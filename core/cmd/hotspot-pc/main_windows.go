@@ -5,8 +5,8 @@
 // It uses the official WireGuard for Windows for the tunnel itself, and installs it
 // if it is missing. Pairing needs no file: this PC makes its own key pair and shows
 // a QR code with its public key and a one-time secret, which the phone's camera
-// reads; the secret proves to each side that nobody sits in between. (A phone with
-// an older app compares a six-digit number instead.)
+// reads; the secret proves to each side that nobody sits in between, and the
+// computer's name with it.
 //
 // Started without arguments (a double click) it opens its window (HTML drawn by Edge
 // WebView2, see ui/index.html), which walks through the setup or shows the state and

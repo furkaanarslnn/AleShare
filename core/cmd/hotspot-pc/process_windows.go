@@ -92,6 +92,8 @@ func sysPath(name string) string {
 		return filepath.Join(systemDir(), name)
 	case "powershell.exe":
 		return filepath.Join(systemDir(), "WindowsPowerShell", "v1.0", name)
+	case "explorer.exe":
+		return filepath.Join(filepath.Dir(systemDir()), name)
 	}
 	return name
 }

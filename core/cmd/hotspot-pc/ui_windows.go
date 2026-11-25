@@ -34,8 +34,6 @@ type setupUI interface {
 	Choose(question string, options []string) string
 	// QR shows the pairing code until the phone has read it.
 	QR(code string)
-	// Number shows the six digits to compare, for a phone whose app is older than QR pairing.
-	Number(sas string)
 	// Out takes the output of the programs the setup runs (winget); the window drops it.
 	Out() io.Writer
 }
@@ -78,10 +76,6 @@ func (consoleUI) QR(code string) {
 		fmt.Println("QR kod çizilemedi:", err)
 	}
 	fmt.Println("Kod yalnızca bu eşleşme içindir; okutunca bu bilgisayar kendiliğinden eklenir. Bekliyorum...")
-}
-
-func (consoleUI) Number(sas string) {
-	fmt.Printf("\n  Eşleşme numarası:  %s\n\n  Telefonda aynı numara görünüyorsa \"Eşleştir\"e dokun.\n  Numara farklıysa veya bu isteği sen başlatmadıysan \"Reddet\"e dokun.\n\n", sas)
 }
 
 func (consoleUI) Out() io.Writer { return os.Stdout }

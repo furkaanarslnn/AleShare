@@ -133,6 +133,9 @@ type health struct {
 	// once, whenever they share). From then on its silence on arrival means its app is down, which takes seconds
 	// to tell instead of a tunnel's worth of failed probes.
 	Answers bool `json:"answers"`
+	// LocationOff: the last look for the phone's network found Windows' location setting off, which hides the
+	// networks around (see locationBlocked). The window then says how to turn it on.
+	LocationOff bool `json:"location_off,omitempty"`
 }
 
 // bringBackEvery is how seldom the computer goes back after Windows left the phone's network by itself.
@@ -243,4 +246,14 @@ func matchPhone(nets []netEntry, phone string, profiles ...string) (connected, p
 		}
 	}
 	return false, profileSeen
+}
+
+// locationBlocked reports whether netsh refused to list Wi-Fi networks because Windows' location setting is off:
+// from Windows 11 24H2 on, the names of nearby networks count as the computer's location. netsh then answers
+// with a hint to the location settings instead of the list.
+func locationBlocked(netshOutput string) bool {
+	s := strings.ToLower(netshOutput)
+	return strings.Contains(s, "ms-settings:privacy-location") ||
+		(strings.Contains(s, "location") && strings.Contains(s, "permission")) ||
+		strings.Contains(s, "konum")
 }

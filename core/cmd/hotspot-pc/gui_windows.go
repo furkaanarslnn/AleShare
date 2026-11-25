@@ -53,6 +53,7 @@ type windowState struct {
 	PhoneWaiting     bool         `json:"phoneWaiting"` // the phone has that release but still runs an older one
 	Phone            *phoneStatus `json:"phone"`        // the phone's state now; nil when it cannot be asked
 	View             connView     `json:"view"`
+	LocationOff      bool         `json:"locationOff"` // Windows hides the Wi-Fi networks around (see locationBlocked)
 	Log              []string     `json:"log"`
 	Online           onlineOffer  `json:"online"`        // a newer release on GitHub; its name is empty when there is none
 	OnlineChecked    string       `json:"onlineChecked"` // when GitHub last answered, as the window writes it; "" for never
@@ -66,7 +67,7 @@ type onlineOffer struct {
 
 // event is what the Go side tells the page as it happens.
 type event struct {
-	Type    string       `json:"type"` // state, step, done, password, choose, qr, number, finished, failed, cancelled, action
+	Type    string       `json:"type"` // state, step, done, password, choose, qr, finished, failed, cancelled, action
 	Step    stepID       `json:"step,omitempty"`
 	Detail  string       `json:"detail,omitempty"`
 	SSID    string       `json:"ssid,omitempty"`
@@ -123,18 +124,19 @@ func runWindow(setupNow bool) error {
 	g.upgrade.Store(canUpgrade())
 	g.last = g.collect()
 	for name, fn := range map[string]any{
-		"hsBoot":        g.boot,
-		"hsStartSetup":  g.startSetup,
-		"hsAnswer":      g.answer,
-		"hsSetAutoJoin": g.setAutoJoin,
-		"hsUpgrade":     g.upgradeNow,
-		"hsUninstall":   g.uninstall,
-		"hsConnect":     g.connect,
-		"hsOpenLog":     g.openLog,
-		"hsPhone":       g.phone,
-		"hsSpeedTest":   g.speedTest,
-		"hsOnline":      g.installOnline,
-		"hsCheckOnline": g.checkNow,
+		"hsBoot":         g.boot,
+		"hsStartSetup":   g.startSetup,
+		"hsAnswer":       g.answer,
+		"hsSetAutoJoin":  g.setAutoJoin,
+		"hsUpgrade":      g.upgradeNow,
+		"hsUninstall":    g.uninstall,
+		"hsConnect":      g.connect,
+		"hsOpenLog":      g.openLog,
+		"hsOpenLocation": func() { openLocationSettings() },
+		"hsPhone":        g.phone,
+		"hsSpeedTest":    g.speedTest,
+		"hsOnline":       g.installOnline,
+		"hsCheckOnline":  g.checkNow,
 	} {
 		if err := w.Bind(name, fn); err != nil {
 			return err
@@ -229,7 +231,9 @@ func (g *window) collect() windowState {
 		}
 		s.PhoneWaiting = running > 0 && s.PhoneApp > running
 	}
-	s.View = describe(set, s.OnNetwork, s.Tunnel, loadHealth())
+	h := loadHealth()
+	s.View = describe(set, s.OnNetwork, s.Tunnel, h)
+	s.LocationOff = h.LocationOff && !s.OnNetwork && set.AutoJoin
 	s.Log = lastLog(6)
 	return s
 }
@@ -322,8 +326,6 @@ func (u windowUI) QR(code string) {
 	}
 	u.g.emit(event{Type: "qr", Step: stepPair, SVG: svg})
 }
-
-func (u windowUI) Number(sas string) { u.g.emit(event{Type: "number", Step: stepPair, Detail: sas}) }
 
 func (u windowUI) Out() io.Writer { return io.Discard }
 

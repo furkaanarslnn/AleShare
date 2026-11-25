@@ -1,28 +1,19 @@
-// Package pairing lets a new device join the gateway without any file or QR
-// code transfer.
+// Package pairing lets a computer join the gateway without any file or secret crossing the network.
 //
-// The device generates its own WireGuard key pair and sends only the public
-// key, so no secret ever crosses the network. To rule out a man in the middle,
-// both screens show a short authentication string (SAS) derived from the two
-// public keys, and the user approves on the phone only if the numbers match.
-// The device commits to its key (hash) before it sees the phone's, so an
-// attacker cannot search for a key pair that makes the two numbers collide.
-//
-// Protocol (HTTP/JSON, plain: nothing in it is secret):
-//
-//	POST /v1/hello  {name, commit}                  -> {session, server_public_key}
-//	POST /v1/reveal {session, public_key, nonce}    -> {ipv4, ipv6, dns, mtu, port}
-//
-// reveal blocks until the user has decided on the phone.
-//
-// With a QR code no number needs comparing. The computer shows its public key and a random secret as a QR code
-// (QRCode) and the phone scans it. The secret never crosses the network: each side proves with it (HMAC) that it
-// is the one on the other end of the camera, so a stranger on the Wi-Fi network can neither join in the
-// computer's place nor pose as the phone.
+// The computer makes its own WireGuard key pair and shows its public key and a random one-time secret as a QR
+// code (QRCode); the phone's camera reads it. The secret never crosses the network: each side proves with it
+// (HMAC) that it is the one on the other end of the camera, so a stranger on the Wi-Fi network can neither join in
+// the computer's place nor pose as the phone. A code of the second form ("HSPC2:") also binds the computer's name
+// into the proof, so that nobody on the way can rename the computer it admits.
 //
 //	POST /v1/qr {name, public_key, nonce, proof}    -> {ipv4, ipv6, dns, mtu, port, server_public_key, proof}
 //
 // Until the phone has scanned that computer's code it answers 409, and the computer asks again a moment later.
+//
+// Up to 1.2.5 a computer could also pair by comparing a six-digit number (/v1/hello, /v1/reveal). Someone on the
+// network between the two could make both screens show the same number (they choose their own key after seeing
+// the computer's commitment, then try keys until the number matches), so that way is gone: the phone answers it
+// with 410 and the computer only pairs by QR code.
 package pairing
 
 import (
@@ -33,7 +24,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,17 +51,18 @@ const (
 	nonceSize   = 16
 )
 
-// ErrDenied is returned to the device when the user refused on the phone.
-var ErrDenied = errors.New("pairing: the pairing was refused on the phone")
-
 // ErrNotScanned is returned to the computer while the phone has not scanned its QR code yet.
 var ErrNotScanned = errors.New("pairing: the phone has not scanned the code yet")
 
 // ErrNoQR is returned to the computer when the phone's app is too old to pair with a QR code.
 var ErrNoQR = errors.New("pairing: the phone cannot pair with a QR code")
 
-// QRPrefix starts the text of a computer's pairing QR code, so that the phone tells it from other codes.
-const QRPrefix = "HSPC1:"
+// QRPrefix starts the text of a computer's pairing QR code, so that the phone tells it from other codes; a code of
+// the second form, which binds the computer's name, starts with QRPrefix2.
+const (
+	QRPrefix  = "HSPC1:"
+	QRPrefix2 = "HSPC2:"
+)
 
 const qrSecretSize = 16
 
@@ -79,18 +70,31 @@ const qrSecretSize = 16
 type QRCode struct {
 	Public wgkey.Key
 	Secret [qrSecretSize]byte
+	// Named: the computer proves its name too (the second form). The phone then takes no other name for it.
+	Named bool
 }
 
 // String is the text of the QR code.
 func (q QRCode) String() string {
-	return QRPrefix + base64.RawURLEncoding.EncodeToString(append(q.Public[:], q.Secret[:]...))
+	prefix := QRPrefix
+	if q.Named {
+		prefix = QRPrefix2
+	}
+	return prefix + base64.RawURLEncoding.EncodeToString(append(q.Public[:], q.Secret[:]...))
 }
 
-// ParseQR reads the text of a computer's QR code.
+// ParseQR reads the text of a computer's QR code, of either form.
 func ParseQR(s string) (QRCode, error) {
 	var q QRCode
-	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(strings.TrimSpace(s), QRPrefix))
-	if !strings.HasPrefix(strings.TrimSpace(s), QRPrefix) || err != nil || len(raw) != len(q.Public)+qrSecretSize {
+	s = strings.TrimSpace(s)
+	rest, ok := strings.CutPrefix(s, QRPrefix2)
+	if ok {
+		q.Named = true
+	} else if rest, ok = strings.CutPrefix(s, QRPrefix); !ok {
+		return QRCode{}, errors.New("pairing: not a computer's pairing code")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(rest)
+	if err != nil || len(raw) != len(q.Public)+qrSecretSize {
 		return QRCode{}, errors.New("pairing: not a computer's pairing code")
 	}
 	copy(q.Public[:], raw)
@@ -101,10 +105,19 @@ func ParseQR(s string) (QRCode, error) {
 	return q, nil
 }
 
-// clientProof shows that the computer knows the secret of the code the phone scanned.
-func clientProof(secret []byte, client wgkey.Key, nonce []byte) []byte {
+// clientProof shows that the computer knows the secret of the code the phone scanned. For a code of the second
+// form (named) it covers the name the computer gives itself as well.
+func clientProof(secret []byte, client wgkey.Key, nonce []byte, named bool, name string) []byte {
 	m := hmac.New(sha256.New, secret)
-	m.Write([]byte("hotspot-qr-client-v1"))
+	if named {
+		m.Write([]byte("hotspot-qr-client-v2"))
+		var n [4]byte
+		binary.BigEndian.PutUint32(n[:], uint32(len(name)))
+		m.Write(n[:])
+		m.Write([]byte(name))
+	} else {
+		m.Write([]byte("hotspot-qr-client-v1"))
+	}
 	m.Write(client[:])
 	m.Write(nonce)
 	return m.Sum(nil)
@@ -136,31 +149,6 @@ type Registrar interface {
 	Enroll(name string, public wgkey.Key) (Grant, error)
 }
 
-// Listener asks the user.
-type Listener interface {
-	// Approve is called once the device revealed its key. sas is the number the
-	// device shows too. It blocks until the user decided.
-	Approve(name, sas string) bool
-}
-
-// SAS returns the six digits both sides display.
-func SAS(client, server wgkey.Key, nonce []byte) string {
-	h := sha256.New()
-	h.Write([]byte("hotspot-pairing-sas-v1"))
-	h.Write(client[:])
-	h.Write(server[:])
-	h.Write(nonce)
-	return fmt.Sprintf("%06d", binary.BigEndian.Uint32(h.Sum(nil)[:4])%1000000)
-}
-
-func commitment(client wgkey.Key, nonce []byte) []byte {
-	h := sha256.New()
-	h.Write([]byte("hotspot-pairing-commit-v1"))
-	h.Write(client[:])
-	h.Write(nonce)
-	return h.Sum(nil)
-}
-
 func cleanName(s string) string {
 	s = strings.TrimSpace(s)
 	var b strings.Builder
@@ -177,29 +165,14 @@ func cleanName(s string) string {
 
 // ---- server (the phone) ----
 
-type outcome struct {
-	grant  Grant
-	denied bool
-	err    error
-}
-
-type session struct {
-	name     string
-	commit   []byte
-	revealed bool
-	result   chan outcome
-}
-
 // Server is an open pairing window.
 type Server struct {
 	reg Registrar
-	ln  Listener
 	l   net.Listener
 	srv *http.Server
 
 	mu       sync.Mutex
 	attempts int
-	sessions map[string]*session
 	expected *QRCode // the computer whose code the phone scanned; nil when none
 
 	done  chan struct{}
@@ -208,17 +181,16 @@ type Server struct {
 }
 
 // Listen opens a pairing window on addr for the given duration. It closes
-// itself after one pairing (accepted or refused), after too many attempts, or
-// when the window ends.
-func Listen(addr string, reg Registrar, ln Listener, window time.Duration) (*Server, error) {
+// itself after one pairing, after too many wrong proofs, or when the window ends.
+func Listen(addr string, reg Registrar, window time.Duration) (*Server, error) {
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{reg: reg, ln: ln, l: l, sessions: make(map[string]*session), done: make(chan struct{})}
+	s := &Server{reg: reg, l: l, done: make(chan struct{})}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/hello", s.hello)
-	mux.HandleFunc("/v1/reveal", s.reveal)
+	mux.HandleFunc("/v1/hello", gone)
+	mux.HandleFunc("/v1/reveal", gone)
 	mux.HandleFunc("/v1/qr", s.qr)
 	s.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
 	s.timer = time.AfterFunc(window, s.Close)
@@ -275,96 +247,10 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-func (s *Server) hello(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Name   string `json:"name"`
-		Commit []byte `json:"commit"`
-	}
-	if !decode(w, r, &req) {
-		return
-	}
-	name := cleanName(req.Name)
-	if name == "" || len(req.Commit) != sha256.Size {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	s.mu.Lock()
-	if s.attempts >= maxAttempts {
-		s.mu.Unlock()
-		http.Error(w, "too many attempts", http.StatusTooManyRequests)
-		go s.Close()
-		return
-	}
-	s.attempts++
-	raw := make([]byte, 16)
-	rand.Read(raw)
-	id := hex.EncodeToString(raw)
-	s.sessions[id] = &session{name: name, commit: req.Commit, result: make(chan outcome, 1)}
-	s.mu.Unlock()
-
-	writeJSON(w, http.StatusOK, map[string]any{"session": id, "server_public_key": s.reg.ServerPublicKey()})
-}
-
-func (s *Server) reveal(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Session   string    `json:"session"`
-		PublicKey wgkey.Key `json:"public_key"`
-		Nonce     []byte    `json:"nonce"`
-	}
-	if !decode(w, r, &req) {
-		return
-	}
-	s.mu.Lock()
-	sess := s.sessions[req.Session]
-	if sess == nil || sess.revealed {
-		s.mu.Unlock()
-		http.Error(w, "unknown session", http.StatusNotFound)
-		return
-	}
-	sess.revealed = true
-	s.mu.Unlock()
-
-	if len(req.Nonce) < nonceSize || req.PublicKey.IsZero() || !bytes.Equal(commitment(req.PublicKey, req.Nonce), sess.commit) {
-		http.Error(w, "key does not match the commitment", http.StatusBadRequest)
-		return
-	}
-
-	sas := SAS(req.PublicKey, s.reg.ServerPublicKey(), req.Nonce)
-	go func() {
-		if !s.ln.Approve(sess.name, sas) {
-			sess.result <- outcome{denied: true}
-			return
-		}
-		// The user may have answered after the window closed or the computer gave up: that computer has thrown its
-		// key away by now, and enrolling it would leave a device in the list that nobody holds the key of.
-		select {
-		case <-s.done:
-			sess.result <- outcome{denied: true}
-			return
-		case <-r.Context().Done():
-			sess.result <- outcome{denied: true}
-			return
-		default:
-		}
-		g, err := s.reg.Enroll(sess.name, req.PublicKey)
-		sess.result <- outcome{grant: g, err: err}
-	}()
-
-	select {
-	case out := <-sess.result:
-		switch {
-		case out.denied:
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "denied"})
-		case out.err != nil:
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": out.err.Error()})
-		default:
-			writeJSON(w, http.StatusOK, out.grant)
-		}
-		go s.Close() // one pairing per window
-	case <-s.done:
-		http.Error(w, "pairing window closed", http.StatusServiceUnavailable)
-	case <-r.Context().Done():
-	}
+// gone answers the number pairing of computers older than 1.0.10: it is no longer offered (see the package
+// comment). Such a computer says that the phone refused, and its user updates it.
+func gone(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, "number pairing is no longer offered: update AleShare on the computer and pair with the QR code", http.StatusGone)
 }
 
 // qrAnswer is the phone's answer to a computer whose code it scanned.
@@ -398,7 +284,7 @@ func (s *Server) qr(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "not scanned"})
 		return
 	}
-	if !hmac.Equal(req.Proof, clientProof(exp.Secret[:], req.PublicKey, req.Nonce)) {
+	if !hmac.Equal(req.Proof, clientProof(exp.Secret[:], req.PublicKey, req.Nonce, exp.Named, req.Name)) {
 		s.attempts++
 		tooMany := s.attempts >= maxAttempts
 		s.mu.Unlock()
@@ -423,10 +309,11 @@ func (s *Server) qr(w http.ResponseWriter, r *http.Request) {
 
 // ---- client (the computer) ----
 
-// NewQR makes this computer's key pair and the QR code that lets the phone admit it.
+// NewQR makes this computer's key pair and the QR code that lets the phone admit it (of the second form, which
+// binds the name; a phone older than 1.2.6 does not read it, and is updated first).
 func NewQR() (wgkey.Key, QRCode, error) {
 	priv := wgkey.Generate()
-	q := QRCode{Public: priv.Public()}
+	q := QRCode{Public: priv.Public(), Named: true}
 	if _, err := rand.Read(q.Secret[:]); err != nil {
 		return wgkey.Key{}, QRCode{}, err
 	}
@@ -434,8 +321,8 @@ func NewQR() (wgkey.Key, QRCode, error) {
 }
 
 // PairQR asks the phone at phone ("host:port") to admit this computer, whose code (made with NewQR from priv) the
-// phone scans. It returns ErrNotScanned while the phone has not scanned it, and ErrNoQR if the phone's app does
-// not know QR pairing. The phone's answer is taken only with its proof of having scanned the code.
+// phone scans. It returns ErrNotScanned while the phone has not scanned it, and ErrNoQR if the phone's app is
+// older than QR pairing. The phone's answer is taken only with its proof of having scanned the code.
 func PairQR(ctx context.Context, phone, name string, priv wgkey.Key, code QRCode) (*Result, error) {
 	nonce := make([]byte, nonceSize)
 	if _, err := rand.Read(nonce); err != nil {
@@ -444,7 +331,7 @@ func PairQR(ctx context.Context, phone, name string, priv wgkey.Key, code QRCode
 	pub := priv.Public()
 	var ans qrAnswer
 	err := post(ctx, "http://"+phone+"/v1/qr", map[string]any{
-		"name": name, "public_key": pub, "nonce": nonce, "proof": clientProof(code.Secret[:], pub, nonce),
+		"name": name, "public_key": pub, "nonce": nonce, "proof": clientProof(code.Secret[:], pub, nonce, code.Named, name),
 	}, &ans)
 	var se *statusError
 	if errors.As(err, &se) {
@@ -474,40 +361,6 @@ type Result struct {
 	Grant   Grant
 }
 
-// Pair asks the phone at phone ("host:port") to admit this device. showSAS is
-// called with the number that must match the one on the phone's screen; Pair
-// then blocks until the user decided there.
-func Pair(ctx context.Context, phone, name string, showSAS func(sas string)) (*Result, error) {
-	priv := wgkey.Generate()
-	pub := priv.Public()
-	nonce := make([]byte, nonceSize)
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, err
-	}
-	base := "http://" + phone
-
-	var hello struct {
-		Session         string    `json:"session"`
-		ServerPublicKey wgkey.Key `json:"server_public_key"`
-	}
-	if err := post(ctx, base+"/v1/hello", map[string]any{"name": name, "commit": commitment(pub, nonce)}, &hello); err != nil {
-		return nil, err
-	}
-	if hello.ServerPublicKey.IsZero() || hello.Session == "" {
-		return nil, errors.New("pairing: the phone sent an incomplete answer")
-	}
-	showSAS(SAS(pub, hello.ServerPublicKey, nonce))
-
-	var grant Grant
-	if err := post(ctx, base+"/v1/reveal", map[string]any{"session": hello.Session, "public_key": pub, "nonce": nonce}, &grant); err != nil {
-		return nil, err
-	}
-	if !grant.IPv4.IsValid() || grant.Port == 0 {
-		return nil, errors.New("pairing: the phone sent an incomplete configuration")
-	}
-	return &Result{Private: priv, Server: hello.ServerPublicKey, Grant: grant}, nil
-}
-
 func post(ctx context.Context, url string, body, out any) error {
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -525,9 +378,6 @@ func post(ctx context.Context, url string, body, out any) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		if resp.StatusCode == http.StatusForbidden {
-			return ErrDenied
-		}
 		return &statusError{code: resp.StatusCode, msg: fmt.Sprintf("pairing: the phone answered %s: %s", resp.Status, strings.TrimSpace(string(msg)))}
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(out)
