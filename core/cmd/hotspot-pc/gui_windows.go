@@ -354,7 +354,45 @@ func (g *window) act(name string, rest ...string) error {
 
 func (g *window) setAutoJoin(on bool) error { return g.act("autojoin", onOffArg(on)) }
 
-func (g *window) upgradeNow() error { return g.act("upgrade") }
+// upgradeNow installs this program (a newer release the user opened) over the installed one: through the watcher
+// service when it runs, which needs no consent prompt and does not look like malware settling in (see
+// request_windows.go); otherwise, or for the same release built anew, the old way with administrator rights.
+func (g *window) upgradeNow() error {
+	self, err := os.Executable()
+	if err != nil {
+		return g.act("upgrade")
+	}
+	data, err := os.ReadFile(self)
+	if err != nil {
+		return g.act("upgrade")
+	}
+	info, err := release.Verify(data)
+	set, serr := loadSettings()
+	if err != nil || serr != nil || info.Code <= installedCode(set) || watchServiceState() != "çalışıyor" {
+		return g.act("upgrade")
+	}
+	if !g.busy.CompareAndSwap(false, true) {
+		return errors.New("Başka bir işlem sürüyor.")
+	}
+	go func() {
+		err := installViaWatcher(data)
+		g.busy.Store(false)
+		if errors.Is(err, errNoWatcher) {
+			g.act("upgrade") //nolint:errcheck // reports through the page itself
+			return
+		}
+		if err == nil {
+			g.upgrade.Store(canUpgrade())
+		}
+		g.refresh()
+		e := event{Type: "action", Action: "upgrade"}
+		if err != nil {
+			e.Error = err.Error()
+		}
+		g.emit(e)
+	}()
+	return nil
+}
 
 // installedCode is the release number of the installed program (this program's own when the settings do not say).
 func installedCode(set settings) int {
@@ -381,7 +419,13 @@ func (g *window) installOnline() error {
 	go func() {
 		path, err := fetchOnlineProgram(*rel)
 		if err == nil {
-			err = runElevated("upgrade", "-from", path)
+			// Through the watcher service when it runs (see request_windows.go), else with administrator rights.
+			var data []byte
+			if data, err = verifiedRelease(path, rel.Code); err == nil {
+				if err = installViaWatcher(data); errors.Is(err, errNoWatcher) {
+					err = runElevated("upgrade", "-from", path)
+				}
+			}
 			_ = os.Remove(path)
 		}
 		g.busy.Store(false)
@@ -614,7 +658,7 @@ func differs(path string) bool {
 	}
 	a, err1 := os.ReadFile(self)
 	b, err2 := os.ReadFile(path)
-	return err1 != nil || err2 != nil || string(a) != string(b)
+	return err1 != nil || err2 != nil || !sameProgram(a, b)
 }
 
 var (

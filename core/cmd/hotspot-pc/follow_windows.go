@@ -54,7 +54,9 @@ func followPhone(set settings, viaTunnel bool) (settings, bool) {
 	if err != nil {
 		return set, false
 	}
-	set = applyFollow(set, info)
+	if info.HasNetwork() { // a phone that shares through the system's hotspot tells no network to follow
+		set = applyFollow(set, info)
+	}
 	syncReleases(set, info, viaTunnel) // the phone is there: newer releases move one way or the other
 	return set, true
 }

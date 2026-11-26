@@ -242,3 +242,18 @@ func TestSetUpdateToken(t *testing.T) {
 		t.Fatalf("token %q, want the app's", got)
 	}
 }
+
+// While the phone shares through the system's hotspot, the devices on that network may use the store and ask
+// about the network; on the app's own network only Wi-Fi Direct's addresses may.
+func TestAcceptLocalFollowsTheNetwork(t *testing.T) {
+	c, _ := NewCore("")
+	hotspot := netip.MustParseAddr("192.168.43.20")
+	c.ownNetworkOff.Store(false)
+	if c.acceptLocal(hotspot) || !c.acceptLocal(netip.MustParseAddr("192.168.49.7")) {
+		t.Fatal("own network: wrong senders")
+	}
+	c.ownNetworkOff.Store(true)
+	if !c.acceptLocal(hotspot) || c.acceptLocal(netip.MustParseAddr("8.8.8.8")) {
+		t.Fatal("system's hotspot: wrong senders")
+	}
+}

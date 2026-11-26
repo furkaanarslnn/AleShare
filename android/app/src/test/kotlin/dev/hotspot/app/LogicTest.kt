@@ -250,9 +250,9 @@ class LogicTest {
   fun whereTheLinkIsSlow() {
     val r = SpeedTest.Result(downBps = 80_000_000, upBps = 20_000_000, pingMs = 70, bytes = 0, at = 0)
     assertNull("the phone itself: no Wi-Fi measured", bottleneck(r))
-    assertEquals("Yavaşlık mobil internetten kaynaklanıyor; Wi-Fi daha hızlı.", bottleneck(r.copy(wifiDownBps = 700_000_000)))
-    assertEquals("Yavaşlık Wi-Fi'den kaynaklanıyor. Telefona yaklaş ya da 5 GHz'e geç.", bottleneck(r.copy(wifiDownBps = 30_000_000)))
-    assertEquals("Wi-Fi ile mobil internet aynı hızda.", bottleneck(r.copy(wifiDownBps = 85_000_000)))
+    assertEquals("Yavaşlık telefonun internetinden kaynaklanıyor; telefonla aradaki Wi-Fi daha hızlı.", bottleneck(r.copy(wifiDownBps = 700_000_000)))
+    assertEquals("Yavaşlık telefonla aradaki Wi-Fi'den kaynaklanıyor. Telefona yaklaş ya da 5 GHz'e geç.", bottleneck(r.copy(wifiDownBps = 30_000_000)))
+    assertEquals("Telefonla aradaki Wi-Fi ile telefonun interneti aynı hızda.", bottleneck(r.copy(wifiDownBps = 85_000_000)))
   }
 
   @Test
@@ -393,5 +393,97 @@ class LogicTest {
     for (y in 0 until 300) for (x in 0 until 300) if (matrix[x, y]) pixels[(y + 100) * w + x + 150] = 0xFF000000.toInt()
     assertEquals(text, QrPhoto.decodePixels(w, h, pixels))
     assertNull("an empty picture", QrPhoto.decodePixels(w, h, IntArray(w * h) { 0xFFFFFFFF.toInt() }))
+  }
+
+  /** Sharing is off only when no slot can hold a SIM; a SIM that waits for its PIN or is still being read counts. */
+  @Test
+  fun aDeviceWithoutASimCardDoesNotShare() {
+    val absent = android.telephony.TelephonyManager.SIM_STATE_ABSENT
+    val ready = android.telephony.TelephonyManager.SIM_STATE_READY
+    val pin = android.telephony.TelephonyManager.SIM_STATE_PIN_REQUIRED
+    val unknown = android.telephony.TelephonyManager.SIM_STATE_UNKNOWN
+    val broken = android.telephony.TelephonyManager.SIM_STATE_CARD_IO_ERROR
+    assertFalse("no slots (a Wi-Fi tablet)", SimCard.usable(emptyList()))
+    assertFalse("both slots empty", SimCard.usable(listOf(absent, absent)))
+    assertFalse("empty and broken", SimCard.usable(listOf(absent, broken)))
+    assertTrue("a SIM in the second slot", SimCard.usable(listOf(absent, ready)))
+    assertTrue("a SIM waiting for its PIN", SimCard.usable(listOf(pin)))
+    assertTrue("not read yet", SimCard.usable(listOf(unknown)))
+  }
+
+  /** Mobile data needs a SIM card, the phone's Wi-Fi does not; without a pick a device without one shares its Wi-Fi. */
+  @Test
+  fun theSourceOfTheSharedInternet() {
+    assertEquals(Source.Mobile, defaultSource(hasSim = true))
+    assertEquals(Source.Wifi, defaultSource(hasSim = false))
+    assertNull(sourceProblem(Source.Mobile, hasSim = true))
+    assertEquals(SimCard.MISSING, sourceProblem(Source.Mobile, hasSim = false))
+    assertNull("Wi-Fi without a SIM card", sourceProblem(Source.Wifi, hasSim = false))
+    assertEquals(Source.Wifi, Source.of("wifi"))
+    assertNull(Source.of("satellite"))
+    assertTrue("joined to another phone's Wi-Fi Direct network", clashesWithOwnNetwork(byteArrayOf(192.toByte(), 168.toByte(), 49, 23)))
+    assertFalse("a home network", clashesWithOwnNetwork(byteArrayOf(192.toByte(), 168.toByte(), 1, 23)))
+  }
+
+  /** Today's breakdown: the biggest users first, the rest as one; a quiet device is left out. */
+  @Test
+  fun todaysDataIsBrokenDownByDevice() {
+    val shares = dev.hotspot.app.ui.dayShares(mapOf("a" to 10L, "b" to 50L, "c" to 0L, "d" to 5L, "e" to 7L, "f" to 3L), most = 3)
+    assertEquals(listOf("b", "a", "e", "Diğer"), shares.map { it.name })
+    assertEquals(8L, shares.last().bytes)
+    assertEquals(listOf("b", "a"), dev.hotspot.app.ui.dayShares(mapOf("a" to 1L, "b" to 2L)).map { it.name })
+    assertEquals("%55", dev.hotspot.app.ui.percentLabel(377, 679))
+    assertEquals("<%1", dev.hotspot.app.ui.percentLabel(4, 679))
+    assertEquals("%0", dev.hotspot.app.ui.percentLabel(0, 679))
+    assertEquals("Çok hızlı", dev.hotspot.app.ui.speedWord(123_000_000))
+    assertEquals("Orta", dev.hotspot.app.ui.speedWord(8_000_000))
+    assertEquals("Yavaş", dev.hotspot.app.ui.speedWord(1_000_000))
+    assertEquals("3 dk önce", dev.hotspot.app.ui.ago(1_000, now = 1_000 + 200))
+    assertEquals("2 gün önce", dev.hotspot.app.ui.ago(0, now = 2 * 24 * 3600 + 10))
+  }
+
+  /** How long sharing has been on, as the status card says it. */
+  @Test
+  fun theUptimeIsToldShortly() {
+    assertEquals("45 sn", dev.hotspot.app.ui.uptimeLabel(45_000))
+    assertEquals("12 dk", dev.hotspot.app.ui.uptimeLabel(12 * 60_000L + 30_000))
+    assertEquals("2 sa", dev.hotspot.app.ui.uptimeLabel(120 * 60_000L))
+    assertEquals("1 sa 5 dk", dev.hotspot.app.ui.uptimeLabel(65 * 60_000L))
+    assertEquals("a clock that went back", "0 sn", dev.hotspot.app.ui.uptimeLabel(-5_000))
+  }
+
+  /** What the devices list says of a device: how it is doing, and its rules in one line. */
+  @Test
+  fun theDevicesListTellsHowEachDeviceIsDoing() {
+    val d = dev.hotspot.app.ui.DeviceView(
+      name = "Laptop", computer = false, connected = true, pause = Controls.Pause.None, usedToday = 0,
+      limitMb = 0, speedKbps = 0, quiet = null, guest = null,
+    )
+    val kind = dev.hotspot.app.ui.DeviceState.Kind.Connected
+    assertEquals("Bağlı", dev.hotspot.app.ui.deviceState(d, sharing = true).text)
+    assertEquals(kind, dev.hotspot.app.ui.deviceState(d, sharing = true).kind)
+    assertEquals("not while sharing is off", "Bağlı değil", dev.hotspot.app.ui.deviceState(d, sharing = false).text)
+    assertEquals("Duraklatıldı", dev.hotspot.app.ui.deviceState(d.copy(pause = Controls.Pause.Manual), sharing = true).text)
+    assertEquals("Günlük sınır doldu", dev.hotspot.app.ui.deviceState(d.copy(pause = Controls.Pause.Limit), sharing = true).text)
+    assertEquals("", dev.hotspot.app.ui.deviceRules(d))
+    assertEquals(
+      "Sınır 1 GB · 5 Mbit/s · 23:00–07:00 kapalı",
+      dev.hotspot.app.ui.deviceRules(d.copy(limitMb = 1024, speedKbps = 5000, quiet = QuietHours(23 * 60, 7 * 60))),
+    )
+    val idle = d.copy(name = "Tablet", connected = false)
+    val held = d.copy(name = "Telefon", pause = Controls.Pause.Manual)
+    assertEquals("3 cihaz · 1 bağlı", dev.hotspot.app.ui.devicesSummary(listOf(d, idle, held), sharing = true))
+    assertEquals("3 cihaz", dev.hotspot.app.ui.devicesSummary(listOf(d, idle, held), sharing = false))
+  }
+
+  /** The phone's own network opens on the channel of the Wi-Fi it shares when that is in the band picked, and allowed. */
+  @Test
+  fun theOwnNetworkFollowsTheSharedWifisChannel() {
+    assertEquals(2437, sharedChannel(2437, band5 = false))
+    assertNull("another band than the one picked", sharedChannel(5180, band5 = false))
+    assertEquals(5180, sharedChannel(5180, band5 = true))
+    assertEquals(5745, sharedChannel(5745, band5 = true))
+    assertNull("a radar (DFS) channel", sharedChannel(5500, band5 = true))
+    assertNull("not connected", sharedChannel(-1, band5 = true))
   }
 }

@@ -130,6 +130,7 @@ type phoneStatus struct {
 	Charging  bool          `json:"charging"`
 	Network   string        `json:"network"`
 	Signal    int           `json:"signal"`
+	Source    string        `json:"source,omitempty"` // "mobile" or "wifi": what the phone shares (apps from 1.2.7 say it)
 	Today     int64         `json:"today"`
 	LimitMB   int64         `json:"limit_mb"`
 	DownBps   int64         `json:"down_bps"`

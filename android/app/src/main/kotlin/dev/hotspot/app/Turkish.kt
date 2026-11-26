@@ -2,9 +2,6 @@ package dev.hotspot.app
 
 import java.util.Locale
 
-/** Who made the app; shown under the version. */
-const val MAKER = "furkanyela"
-
 /**
  * Turkish endings after a number follow the way the number is read aloud: "%45'i" (kırk beşi) but "%6'sı" (altısı)
  * and "%10'u" (onu); "07:00'de" (yedide) but "07:30'da" (otuzda) and "03:00'te" (üçte). A fixed ending is wrong

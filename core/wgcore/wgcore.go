@@ -110,9 +110,12 @@ type Core struct {
 	wifiConn net.PacketConn
 	rxSeen   map[wgkey.Key]rxSeen // see ActivePeers
 	split    atomic.Bool          // see SetSplitTLS
-	pol      policy               // see policy.go
-	out      outbound             // how sharing reaches the internet while it runs (see speedtest.go)
-	speed    sync.Mutex           // held while a speed test runs
+	// ownNetworkOff: sharing runs without the app's own network (the system's hotspot, set up by hand); its
+	// devices are on another network than Wi-Fi Direct's (see acceptLocal).
+	ownNetworkOff atomic.Bool
+	pol           policy     // see policy.go
+	out           outbound   // how sharing reaches the internet while it runs (see speedtest.go)
+	speed         sync.Mutex // held while a speed test runs
 
 	// What devices are told about the Wi-Fi network (SetWifi).
 	ssid, password, nextSSID, nextPassword string
@@ -269,6 +272,20 @@ func (c *Core) PeerNames() string {
 	return strings.Join(names, "\n")
 }
 
+// ComputerNames lists, one per line, the registered clients that are computers: those paired on the phone's screen
+// with a key of their own (see peersChanged); the others were added with a code or a link (phones, tablets, guests).
+func (c *Core) ComputerNames() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var names []string
+	for _, p := range c.state.Peers {
+		if p.PresharedKey.IsZero() {
+			names = append(names, p.Name)
+		}
+	}
+	return strings.Join(names, "\n")
+}
+
 // SetDNS sets the "ip:port" that receives the clients' DNS queries; an empty
 // string drops them. It takes effect at the next Start.
 func (c *Core) SetDNS(upstream string) error {
@@ -356,7 +373,7 @@ func (c *Core) Start(port int, protector Protector) error {
 	// a change through the tunnel, so a failure here does not stop sharing.
 	if conn, err := net.ListenPacket("udp4", fmt.Sprintf(":%d", wifiinfo.Port)); err == nil {
 		c.wifiConn = conn
-		go c.wifi.Serve(conn, wifiDirect.Contains)
+		go c.wifi.Serve(conn, c.acceptLocal)
 	}
 	c.publishLocked()
 	return nil
@@ -392,14 +409,20 @@ func (c *Core) SetWifi(ssid, password, nextSSID, nextPassword string) {
 // publishLocked hands the responder what devices are told now: the Wi-Fi network and, while sharing runs with the
 // APK on offer, the app. Callers hold c.mu.
 func (c *Core) publishLocked() {
-	if c.ssid == "" {
+	c.ownNetworkOff.Store(c.ssid == "")
+	info := &wifiinfo.Info{}
+	if c.ssid != "" {
+		info.Current = wifiinfo.Network{SSID: c.ssid, Password: c.password}
+		if c.nextSSID != "" {
+			info.Next = &wifiinfo.Network{SSID: c.nextSSID, Password: c.nextPassword}
+		}
+	} else if c.updateSrv == nil {
+		// No network of its own and no store: nothing to tell.
 		c.wifi.SetInfo(nil)
 		return
 	}
-	info := &wifiinfo.Info{Current: wifiinfo.Network{SSID: c.ssid, Password: c.password}}
-	if c.nextSSID != "" {
-		info.Next = &wifiinfo.Network{SSID: c.nextSSID, Password: c.nextPassword}
-	}
+	// Without a network of its own (the system's hotspot) the phone still tells the releases and the store's
+	// token: the devices take and bring releases, and the computers read the phone, as with its own network.
 	if c.updateSrv != nil {
 		app, pc, token := c.upd.offers()
 		info.App = &wifiinfo.App{Code: app.code, Name: app.name, Token: token, DeviceToken: deviceToken(token)}
@@ -764,4 +787,12 @@ func (d protectedDialer) DialContext(ctx context.Context, network, address strin
 		},
 	}
 	return nd.DialContext(ctx, network, address)
+}
+
+// acceptLocal tells who may ask the phone on its Wi-Fi network (the question about the network, the store): the
+// devices on the app's own network and, while the phone shares through the system's hotspot instead, those on a
+// private network such as the hotspot's. Everything asked is proved with the device's key or the store's token on
+// top; this only keeps the asking to the phone's neighbourhood.
+func (c *Core) acceptLocal(a netip.Addr) bool {
+	return wifiDirect.Contains(a) || (c.ownNetworkOff.Load() && a.Is4() && a.IsPrivate())
 }

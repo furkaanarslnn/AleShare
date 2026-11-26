@@ -27,7 +27,7 @@ import kotlin.concurrent.thread
 
 /** Runs the Go core as a foreground service so Android keeps the gateway alive. */
 class GatewayService : Service() {
-  private var cellular: CellularNetwork? = null
+  private var upstream: UpstreamNetwork? = null
   private var wakeLock: PowerManager.WakeLock? = null
   private var group: WifiDirectGroup? = null
   private var credentials: WifiCredentials? = null
@@ -108,10 +108,11 @@ class GatewayService : Service() {
 
   /** Returns false when Android does not let the service run in the foreground now. */
   private fun startGateway(port: Int, ownNetwork: Boolean): Boolean {
+    val source = if (GatewayState.state.value.running || opening) GatewayState.state.value.source else sourcePreference(this)
     // Must come first: Android gives a few seconds to show the notification.
     try {
       ServiceCompat.startForeground(
-        this, NOTIFICATION_ID, notification(shownNote ?: LiveNote("Hazırlanıyor", "Mobil veri ve Wi-Fi hazırlanıyor.")),
+        this, NOTIFICATION_ID, notification(shownNote ?: LiveNote("Hazırlanıyor", preparing(source))),
         ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
       )
     } catch (e: Exception) {
@@ -121,15 +122,22 @@ class GatewayService : Service() {
       return false
     }
     if (GatewayState.state.value.running || opening) return true // a second tap while the first is still at work
+    // Mobile data needs a SIM card; the screen, the tile and the widget do not offer a start without one, but a
+    // restart by Android or an old widget's tap may still come here.
+    sourceProblem(source, SimCard.present(this))?.let {
+      GatewayState.update { s -> s.copy(error = it) }
+      ShareControls.refresh(this)
+      return false
+    }
 
     val mine = ++session
-    GatewayState.update { it.copy(starting = true, error = null) }
+    GatewayState.update { it.copy(starting = true, error = null, source = source) }
     ShareControls.refresh(this)
     // A change that was under way when sharing ended (or the app was killed) is dropped; devices that learned it
     // keep looking for both networks and forget the new one when the phone no longer tells it.
     WifiNetwork.clearNext(this)
     if (!ownNetwork) {
-      begin(port, null)
+      begin(port, null, source)
       return true
     }
     val wifi = WifiNetwork.credentials(this)
@@ -147,7 +155,7 @@ class GatewayService : Service() {
       if (error != null) {
         fail(error)
       } else {
-        begin(port, wifi.ssid)
+        begin(port, wifi.ssid, source)
         showBand(g)
       }
     }
@@ -180,9 +188,9 @@ class GatewayService : Service() {
   }
 
   /** The network is there (or not needed): bring the core up. */
-  private fun begin(port: Int, network: String?) {
-    val net = CellularNetwork(this).also { it.start() }
-    cellular = net
+  private fun begin(port: Int, network: String?, source: Source) {
+    val net = UpstreamNetwork(this, source).also { it.start() }
+    upstream = net
     try {
       val core = CoreHolder.get(this)
       core.setSplitTLS(splitPreference(this)) // before the first connection, not after it
@@ -208,7 +216,7 @@ class GatewayService : Service() {
         }
       }
       DataUsage.started()
-      core.start(port.toLong(), CellularProtector(net))
+      core.start(port.toLong(), UpstreamProtector(net))
       // Paired devices may ask for the network's name and password: that is how they follow a change.
       credentials?.let { core.setWifi(it.ssid, it.passphrase, "", "") } ?: core.setWifi("", "", "", "")
       // Held for as long as the gateway runs; narrowing this to "clients are active" needs measurements first.
@@ -218,8 +226,8 @@ class GatewayService : Service() {
           setReferenceCounted(false)
           acquire()
         }
-      GatewayState.update { it.copy(running = true, starting = false, port = port, network = network) }
       sharedSince = System.currentTimeMillis()
+      GatewayState.update { it.copy(running = true, starting = false, port = port, network = network, since = sharedSince) }
       setSharingOn(this, true)
       if (network != null) {
         watchGroup()
@@ -435,19 +443,19 @@ class GatewayService : Service() {
     wifiWatcher?.let { runCatching { unregisterReceiver(it) } }
     wifiWatcher = null
     // The last reading before the core's counters go away with it.
-    CoreHolder.peek()?.takeIf { GatewayState.state.value.running }?.let { DataUsage.record(this, it) }
+    CoreHolder.peek()?.takeIf { GatewayState.state.value.running }?.let { DataUsage.record(this, it, counted = sharesMobileData()) }
     DataUsage.flush(this)
     CoreHolder.peek()?.setWifi("", "", "", "")
     CoreHolder.peek()?.stop()
-    cellular?.stop()
-    cellular = null
+    upstream?.stop()
+    upstream = null
     credentials?.let { group?.remove(it) }
     group = null
     credentials = null
     reopenAttempts = 0
     wakeLock?.takeIf { it.isHeld }?.release()
     wakeLock = null
-    GatewayState.update { it.copy(running = false, starting = false, cellular = false, network = null, wifiChange = null, band = null) }
+    GatewayState.update { it.copy(running = false, starting = false, online = false, captive = false, clash = false, network = null, wifiChange = null, band = null, since = 0) }
     ShareControls.refresh(this, 0)
     // Every way sharing ends on purpose passes here. An update of the app ends the process without it, so the mark
     // stays and the new release starts sharing again (see BootReceiver).
@@ -458,6 +466,12 @@ class GatewayService : Service() {
     shutDown()
     super.onDestroy()
   }
+
+  /** Whether this sharing uses mobile data (and so counts against the daily limits); not on the phone's Wi-Fi. */
+  private fun sharesMobileData() = GatewayState.state.value.source == Source.Mobile
+
+  private fun preparing(source: Source) =
+    if (source == Source.Mobile) "Mobil veri ve Wi-Fi hazırlanıyor." else "Telefonun Wi-Fi bağlantısı ve paylaşım ağı hazırlanıyor."
 
   /** What the notification says; it is replaced only when that changes. */
   private var shownNote: LiveNote? = null
@@ -507,7 +521,8 @@ class GatewayService : Service() {
     }
     takeReceivedApp(core)
     OnlineUpdate.check(this) // is a newer release out on GitHub? Asked every few hours, a few kilobytes
-    Guests.record(this, DataUsage.record(this, core))
+    // What goes over the phone's Wi-Fi is no mobile data: it counts neither today nor against a limit.
+    Guests.record(this, DataUsage.record(this, core, counted = sharesMobileData()))
     val stats = core.stats()
     val down = perSecond(stats.bytesDown, lastBytes?.first, now - lastBytesAt)
     val up = perSecond(stats.bytesUp, lastBytes?.second, now - lastBytesAt)
@@ -516,14 +531,16 @@ class GatewayService : Service() {
     show(shareNote(connected, down, up, DataUsage.today(this).total, stats.bytesUp + stats.bytesDown))
     endGuests(core)
     val devices = core.peerNames().lines().filter { it.isNotBlank() }
-    for (name in Controls.enforceLimits(this, core, devices, DataUsage.today(this).devices)) alertDeviceLimit(name)
+    for (name in Controls.enforceLimits(this, core, devices, DataUsage.today(this).devices)) {
+      if (sharesMobileData()) alertDeviceLimit(name)
+    }
     if (!guard(core)) return
     if (now - planAt >= PLAN_EVERY_MILLIS) {
       planAt = now
       thread(name = "plan", isDaemon = true) { checkPlan() }
     }
     runCatching { core.setPhoneStatus(Controls.status(this, core, down, up, planStatus)) }
-    when (DataUsage.limitAction(this)) {
+    when (if (sharesMobileData()) DataUsage.limitAction(this) else LimitAction.None) {
       LimitAction.Warn -> alertUsage(stopped = false)
       LimitAction.Stop -> {
         alertUsage(stopped = true)
@@ -894,6 +911,10 @@ fun splitPreference(context: Context): Boolean =
 fun setSplitPreference(context: Context, on: Boolean) =
   context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putBoolean("split_tls", on).apply()
 
-/** Whether the app opens its own Wi-Fi network when sharing (the switch under "Gelişmiş"); on by default. */
-fun ownNetworkPreference(context: Context): Boolean =
-  context.getSharedPreferences("settings", Context.MODE_PRIVATE).getBoolean("own_network", true)
+/**
+ * Whether the app opens its own Wi-Fi network when sharing: always, since 1.2.7. The switch that let the user open a
+ * network by hand (the system's hotspot) instead is gone from the settings, and with it any way back: a phone that
+ * had it off opens its own network again. The rest of the app still follows this, should the choice come back.
+ */
+@Suppress("UNUSED_PARAMETER")
+fun ownNetworkPreference(context: Context): Boolean = true

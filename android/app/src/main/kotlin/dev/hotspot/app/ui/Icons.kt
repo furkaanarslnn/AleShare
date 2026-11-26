@@ -52,6 +52,20 @@ object AppIcons {
 
   val ChevronDown = outline("chevron_down", "M6 9l6 6 6-6")
 
+  val ChevronRight = outline("chevron_right", "M9 6l6 6-6 6")
+
+  val Signal = outline("signal", "M5 19v-3", "M10 19v-6", "M15 19v-9", "M20 19V5")
+
+  val Battery = outline("battery", "M3 8a1 1 0 0 1 1-1h13a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z", "M21 10.5v3", "M6 10v4")
+
+  val Bolt = outline("bolt", "M13 3L5 14h6l-1 7 8-11h-6z")
+
+  val Leaf = outline("leaf", "M5 19c0-8 5-13 14-14 0 9-5 14-13 14z", "M5 19l7-7")
+
+  val Refresh = outline("refresh", "M20 11a8 8 0 1 0-2.3 5.7", "M20 5v6h-6")
+
+  val Unlock = outline("unlock", "M5 11h14v9H5z", "M8 11V8a4 4 0 0 1 7.7-1.5")
+
   val ArrowUp = outline("arrow_up", "M12 19V5M6 11l6-6 6 6")
 
   val ArrowDown = outline("arrow_down", "M12 5v14M6 13l6 6 6-6")

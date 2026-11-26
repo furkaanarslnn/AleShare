@@ -11,7 +11,7 @@ enum class ShareAction {
   /** Starts sharing, or stops it when it runs. */
   Toggle,
 
-  /** Opens the app, which says what is missing (a permission, or this phone uses another phone's internet). */
+  /** Opens the app, which says what is missing (a permission, a SIM card, or this phone uses another phone's internet). */
   OpenApp,
 }
 
@@ -44,6 +44,7 @@ object ShareControls {
       s.running -> ShareStatus(true, "Paylaşılıyor", devices, devices, ShareAction.Toggle)
       s.starting -> ShareStatus(false, "Başlatılıyor", "Wi-Fi hazırlanıyor", "Başlatılıyor", ShareAction.Toggle)
       ClientService.wanted(context) -> ShareStatus(false, "Paylaşım kapalı", "Başka bir telefona bağlı", "Başka telefona bağlı", ShareAction.OpenApp)
+      !sourceUsable(context) -> ShareStatus(false, "Paylaşım kapalı", "SIM kart yok", "SIM kart yok", ShareAction.OpenApp)
       !mayShare(context) -> ShareStatus(false, "Paylaşım kapalı", "İzin vermek için dokun", "İzin gerekli", ShareAction.OpenApp)
       s.error != null -> ShareStatus(false, "Paylaşım kapalı", "Başlatılamadı, yeniden dokun", "Başlatılamadı", ShareAction.Toggle)
       else -> ShareStatus(false, "Paylaşım kapalı", "Başlatmak için dokun", "Kapalı", ShareAction.Toggle)

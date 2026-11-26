@@ -466,7 +466,8 @@ func acceptUpdate(a netip.Addr) bool {
 
 // startUpdates serves the store on the Wi-Fi network and inside the tunnel. Callers hold c.mu.
 func (c *Core) startUpdates() map[uint16]func(net.Conn) {
-	srv := &http.Server{Handler: c.upd.handler(acceptUpdate), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
+	accept := func(a netip.Addr) bool { return acceptUpdate(a) || c.acceptLocal(a) }
+	srv := &http.Server{Handler: c.upd.handler(accept), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
 	c.updateTunnel = newTunnelListener()
 	go srv.Serve(c.updateTunnel)
 	if ln, err := net.Listen("tcp4", fmt.Sprintf(":%d", UpdatePort)); err == nil {

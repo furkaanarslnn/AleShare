@@ -454,8 +454,21 @@ func open(aead cipher.AEAD, challenge, packet []byte) (Info, bool) {
 		return Info{}, false
 	}
 	var info Info
-	if json.Unmarshal(plain, &info) != nil || !info.Current.Valid() || (info.Next != nil && !info.Next.Valid()) {
+	if json.Unmarshal(plain, &info) != nil || !info.valid() {
 		return Info{}, false
 	}
 	return info, true
 }
+
+// valid reports whether an answer makes sense: the phone's network (and the one that follows, if any), or, when the
+// phone shares without a network of its own (the system's hotspot, from 1.2.7 on), no network at all but the
+// releases it offers. A device older than 1.2.7 takes the second kind for no answer, as before.
+func (i Info) valid() bool {
+	if i.Current == (Network{}) {
+		return i.Next == nil && (i.App != nil || i.PC != nil)
+	}
+	return i.Current.Valid() && (i.Next == nil || i.Next.Valid())
+}
+
+// HasNetwork reports whether the phone told its own Wi-Fi network; without one there is nothing to follow.
+func (i Info) HasNetwork() bool { return i.Current.SSID != "" }

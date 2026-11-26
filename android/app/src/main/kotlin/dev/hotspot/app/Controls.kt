@@ -216,7 +216,8 @@ object Controls {
   }
 
   /**
-   * What paired computers are told about the phone: battery, mobile network and signal, data used and the speed now,
+   * What paired computers are told about the phone: battery, the shared connection (mobile network or Wi-Fi) and its
+   * signal, data used and the speed now,
    * the switches, and the devices with their use today. [downBps] and [upBps] are bytes per second.
    */
   fun status(context: Context, core: Core, downBps: Long, upBps: Long, plan: Plan.Status?): String {
@@ -240,7 +241,9 @@ object Controls {
       speedJson.put("down_bps", it.downBps).put("up_bps", it.upBps).put("ping_ms", it.pingMs).put("bytes", it.bytes).put("at", it.at)
     }
     val battery = context.getSystemService(BatteryManager::class.java)
-    val (network, signal) = mobileSignal(context)
+    val source = GatewayState.state.value.source
+    // A computer's panel shows these as the phone's connection: "5G" and its bars, or "Wi-Fi" and its bars.
+    val (network, signal) = if (source == Source.Wifi) wifiSignal(context) else mobileSignal(context)
     return JSONObject()
       .put("version", runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "")
       .put("code", runCatching { ownVersionCode(context) }.getOrDefault(0L)) // the release's number: a computer compares by it
@@ -250,6 +253,7 @@ object Controls {
       .put("charging", Guard.read(context).charging)
       .put("network", network)
       .put("signal", signal)
+      .put("source", source.key)
       .put("today", usage.total)
       .put("limit_mb", DataUsage.limitMb(context))
       .put("down_bps", downBps)
@@ -273,6 +277,21 @@ object Controls {
         }
       }
       .toString()
+  }
+
+  /** "Wi-Fi" and the signal of the Wi-Fi the phone is connected to, from 0 to 4; -1 when it is on none. */
+  private fun wifiSignal(context: Context): Pair<String, Int> {
+    val wifi = context.getSystemService(android.net.wifi.WifiManager::class.java) ?: return "Wi-Fi" to -1
+    @Suppress("DEPRECATION")
+    val rssi = runCatching { wifi.connectionInfo?.rssi }.getOrNull()?.takeIf { it > -127 && it < 0 } ?: return "Wi-Fi" to -1
+    val level = if (Build.VERSION.SDK_INT >= 30) {
+      // The system's scale may have more steps than four bars.
+      val max = wifi.maxSignalLevel.coerceAtLeast(1)
+      wifi.calculateSignalLevel(rssi) * 4 / max
+    } else {
+      @Suppress("DEPRECATION") android.net.wifi.WifiManager.calculateSignalLevel(rssi, 5)
+    }
+    return "Wi-Fi" to level.coerceIn(0, 4)
   }
 
   /** The mobile network's generation ("5G", "4G"…) and its signal from 0 (none) to 4 (best); "" and -1 when unknown. */

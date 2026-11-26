@@ -9,7 +9,14 @@ import kotlinx.coroutines.flow.update
 data class GatewayUiState(
   val running: Boolean = false,
   val starting: Boolean = false,
-  val cellular: Boolean = false,
+  /** Where the shared internet comes from (see Source); fixed for a start of sharing. */
+  val source: Source = Source.Mobile,
+  /** The network of [source] is there. */
+  val online: Boolean = false,
+  /** The phone's Wi-Fi waits for its sign-in page (a hotel's, a café's): nothing gets through before it is done. */
+  val captive: Boolean = false,
+  /** The phone's Wi-Fi is another phone's Wi-Fi Direct network, with the same addresses as the app's own. */
+  val clash: Boolean = false,
   val port: Int = GatewayService.DEFAULT_PORT,
   /** Name of the Wi-Fi network the app created, if it did. */
   val network: String? = null,
@@ -18,6 +25,8 @@ data class GatewayUiState(
   val error: String? = null,
   /** A newer release of this app that a paired device brought, waiting to be installed here too. */
   val pendingApp: Updates.Apk? = null,
+  /** When this sharing began, in Unix milliseconds; 0 while it does not run. */
+  val since: Long = 0,
   /** The band and channel the app's own network is on ("5 GHz · kanal 36"), when known. */
   val band: String? = null,
 )

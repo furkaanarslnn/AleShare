@@ -58,7 +58,7 @@ object SpeedTest {
       ClientService.speedTest(context)
       return
     }
-    _state.update { it.copy(running = true, error = null, stage = "Mobil internet ölçülüyor…") }
+    _state.update { it.copy(running = true, error = null, stage = "İnternet hızı ölçülüyor…") }
     val app = context.applicationContext
     thread(name = "speedtest", isDaemon = true) {
       val outcome = runCatching { CoreHolder.get(app).speedTest() }
@@ -89,7 +89,7 @@ object SpeedTest {
     thread(name = "speedtest", isDaemon = true) {
       val outcome = runCatching {
         val (wifiDown, wifiUp) = wifiRates(base, token, open)
-        _state.update { it.copy(stage = "Telefon mobil interneti ölçüyor…") }
+        _state.update { it.copy(stage = "Telefon internet hızını ölçüyor…") }
         phoneRates(base, token, open).copy(wifiDownBps = wifiDown, wifiUpBps = wifiUp)
       }
       outcome.getOrNull()?.let { prefs(app).edit().putString(KEY_LAST, json(it)).apply() }
@@ -180,7 +180,7 @@ object SpeedTest {
       // The phone looks for requests every three seconds: an error before then is an older one.
       if (s.optString("error").isNotEmpty() && System.currentTimeMillis() - asked > 8_000) error(s.optString("error").removePrefix("Ölçülemedi: "))
     }
-    error("telefon mobil hızı ölçemedi")
+    error("telefon internet hızını ölçemedi")
   }
 
   private fun parse(json: String): Result? = runCatching {
@@ -211,12 +211,12 @@ internal fun storeOf(url: String): Pair<String, String>? = runCatching {
   token?.let { "${u.protocol}://${u.authority}" to it }
 }.getOrNull()
 
-/** Where a measured link is slow, comparing the phone's mobile download with the Wi-Fi to it. */
+/** Where a measured link is slow, comparing the phone's internet (mobile data or its Wi-Fi) with the Wi-Fi to it. */
 internal fun bottleneck(r: SpeedTest.Result): String? = when {
   r.wifiDownBps <= 0 -> null
-  r.downBps < r.wifiDownBps * 8 / 10 -> "Yavaşlık mobil internetten kaynaklanıyor; Wi-Fi daha hızlı."
-  r.wifiDownBps < r.downBps * 8 / 10 -> "Yavaşlık Wi-Fi'den kaynaklanıyor. Telefona yaklaş ya da 5 GHz'e geç."
-  else -> "Wi-Fi ile mobil internet aynı hızda."
+  r.downBps < r.wifiDownBps * 8 / 10 -> "Yavaşlık telefonun internetinden kaynaklanıyor; telefonla aradaki Wi-Fi daha hızlı."
+  r.wifiDownBps < r.downBps * 8 / 10 -> "Yavaşlık telefonla aradaki Wi-Fi'den kaynaklanıyor. Telefona yaklaş ya da 5 GHz'e geç."
+  else -> "Telefonla aradaki Wi-Fi ile telefonun interneti aynı hızda."
 }
 
 /** A rate of bits per second the way people read it: "31,2 Mbit/s", or kilobits under one megabit. */

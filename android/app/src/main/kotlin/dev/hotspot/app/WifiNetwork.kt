@@ -9,6 +9,7 @@ import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pManager
 import android.os.Build
 import android.os.Looper
+import android.os.SystemClock
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import java.security.SecureRandom
@@ -216,12 +217,19 @@ class WifiDirectGroup(context: Context) {
    * Opens the group on the band the user picked. 2.4 GHz is seen by every computer. 5 GHz is faster: channel 36
    * first, which every country allows and every adapter scans ("auto" may pick upper channels some adapters do not
    * scan in their region), then any 5 GHz channel the system picks (a phone joined to a 5 GHz network elsewhere may
-   * have to share that channel), and 2.4 GHz when neither opens.
+   * have to share that channel), and 2.4 GHz when neither opens. While the phone shares the Wi-Fi it is connected
+   * to, the channel of that Wi-Fi comes first when it is in the band picked (see [sharedChannel]): one radio then
+   * serves both networks on one channel, instead of switching between two and halving the speed.
    */
   @RequiresApi(Build.VERSION_CODES.Q)
   private fun open(m: WifiP2pManager, ch: WifiP2pManager.Channel, credentials: WifiCredentials, done: (String?) -> Unit) {
     val base = { WifiP2pConfig.Builder().setNetworkName(credentials.ssid).setPassphrase(credentials.passphrase).enablePersistentMode(false) }
     val tries = buildList {
+      if (GatewayState.state.value.source == Source.Wifi) {
+        @Suppress("DEPRECATION")
+        val joined = runCatching { wifi?.connectionInfo?.frequency }.getOrNull() ?: -1
+        sharedChannel(joined, Controls.band5(appContext))?.let { add(base().setGroupOperatingFrequency(it).build()) }
+      }
       if (Controls.band5(appContext)) {
         add(base().setGroupOperatingFrequency(CHANNEL_36_MHZ).build())
         add(base().setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_5GHZ).build())
@@ -231,7 +239,14 @@ class WifiDirectGroup(context: Context) {
     fun attempt(i: Int) {
       try {
         m.createGroup(ch, tries[i], object : WifiP2pManager.ActionListener {
-          override fun onSuccess() = done(null)
+          // Accepted is not open: the group forms a moment later, and sharing must not begin (nor the watcher
+          // take it for gone and open it again) before it is there.
+          override fun onSuccess() = awaitGroup(m, ch, credentials, SystemClock.elapsedRealtime() + GROUP_FORM_MILLIS,
+            formed = { done(null) },
+            timedOut = {
+              if (i + 1 < tries.size) attempt(i + 1)
+              else done("Wi-Fi ağı kurulamadı: telefon ağı açmadı. Wi-Fi'yi kapatıp açarak yeniden dene.")
+            })
           override fun onFailure(reason: Int) {
             if (i + 1 < tries.size && reason != WifiP2pManager.P2P_UNSUPPORTED) return attempt(i + 1)
             done(
@@ -249,6 +264,25 @@ class WifiDirectGroup(context: Context) {
       }
     }
     attempt(0)
+  }
+
+  /** Waits until the group of [credentials] is there ([formed]), asking every moment, or until [deadline] ([timedOut]). */
+  private fun awaitGroup(
+    m: WifiP2pManager, ch: WifiP2pManager.Channel, credentials: WifiCredentials, deadline: Long,
+    formed: () -> Unit, timedOut: () -> Unit,
+  ) {
+    if (closed) return formed() // create() takes the group down again and reports CLOSED
+    try {
+      m.requestGroupInfo(ch) { group ->
+        when {
+          group != null && group.networkName == credentials.ssid -> formed()
+          SystemClock.elapsedRealtime() >= deadline -> timedOut()
+          else -> handler.postDelayed({ awaitGroup(m, ch, credentials, deadline, formed, timedOut) }, GROUP_POLL_MILLIS)
+        }
+      }
+    } catch (_: SecurityException) {
+      formed() // no way to look: as before, take Android's word
+    }
   }
 
   /** True if the group of [credentials] is open right now; [result] is called with the answer. */
@@ -334,6 +368,9 @@ class WifiDirectGroup(context: Context) {
 
   private companion object {
     const val CLOSED = "Paylaşım durduruldu."
+    /** How long a group may take to form after Android accepted it, and how often that is looked at. */
+    const val GROUP_FORM_MILLIS = 10_000L
+    const val GROUP_POLL_MILLIS = 300L
     const val REOPEN_DELAY_MILLIS = 1_000L
     const val REOPEN_RETRY_MILLIS = 3_000L
     /** Channel 36, the lowest 5 GHz channel: allowed indoors everywhere, scanned by every adapter. */
@@ -352,4 +389,15 @@ internal fun missingWifiPermission(context: Context): String? {
   val where = "Ayarlar → Uygulamalar → AleShare → İzinler bölümünden ver, sonra yeniden başlat."
   return if (nearby) "Wi-Fi ağını açmak için \"Yakındaki cihazlar\" izni gerekli. $where"
   else "Wi-Fi ağını açmak için konum izni gerekli (\"Tam konum\" seçili olmalı). $where"
+}
+
+/**
+ * The channel (in MHz) of the Wi-Fi the phone is connected to, [joinedMhz], when the app's own network may open on it
+ * too: in the band picked ([band5]), and in 5 GHz not on a radar (DFS) channel, where a phone may not open a network
+ * of its own. Null otherwise (also when the phone is on no Wi-Fi: -1).
+ */
+internal fun sharedChannel(joinedMhz: Int, band5: Boolean): Int? = when (joinedMhz) {
+  in 2412..2472 -> joinedMhz.takeIf { !band5 }
+  in 5170..5250, in 5735..5835 -> joinedMhz.takeIf { band5 }
+  else -> null
 }

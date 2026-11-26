@@ -387,7 +387,9 @@ class ClientService : VpnService() {
   private fun followWifi(w: WifiNetworks) {
     val now = WifiCredentials(w.ssid, w.password)
     val j = join ?: return
-    if (now.ssid != j.ssid || now.passphrase != j.password) {
+    // A phone that shares through the system's hotspot tells no network of its own (an empty name): there is
+    // nothing to follow, only its releases.
+    if (w.ssid.isNotEmpty() && (now.ssid != j.ssid || now.passphrase != j.password)) {
       ClientStore.updateWifi(this, now)?.let { join = it }
       target = now
       Log.i(TAG, "the phone's network is now ${now.ssid}")
@@ -856,7 +858,7 @@ internal fun afterSearch(saved: WifiCredentials, next: WifiCredentials?, current
     else -> next
   }
 
-/** Binds a socket of the Go tunnel to [network], as [CellularProtector] does for the gateway's sockets. */
+/** Binds a socket of the Go tunnel to [network], as [UpstreamProtector] does for the gateway's sockets. */
 private class NetworkProtector(private val network: Network) : Protector {
   override fun protect(fd: Long): Boolean =
     try {

@@ -111,6 +111,9 @@ func (watcher) Execute(_ []string, requests <-chan svc.ChangeRequest, status cha
 	status <- svc.Status{State: svc.StartPending}
 	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 	started := modTime(installedExe())
+	if err := ensureInbox(); err != nil { // an installation older than the inbox gets it here
+		logf("gelen kutusu hazırlanamadı: %v", err)
+	}
 	look := time.NewTicker(wlanLookEvery)
 	defer look.Stop()
 	wifi := wlanStates()
@@ -163,6 +166,9 @@ func (watcher) Execute(_ []string, requests <-chan svc.ChangeRequest, status cha
 				return true, 1
 			}
 		case <-look.C:
+			if done == nil && requestWaiting() {
+				next = time.Now() // the window handed over a release: a look now installs it
+			}
 			if s := wlanStates(); s != wifi {
 				wifi = s
 				if done != nil {

@@ -21,7 +21,7 @@ class BootReceiver : BroadcastReceiver() {
     UpdateJob.schedule(context) // Android drops an app's jobs when the app is updated
     // After a restart sharing is off, whatever the mark from before says: a later update must not start it.
     if (intent.action == Intent.ACTION_BOOT_COMPLETED) GatewayService.forgetSharing(context)
-    if (sharingAfter(intent.action, GatewayService.wasSharing(context))) {
+    if (sharingAfter(intent.action, GatewayService.wasSharing(context)) && sourceUsable(context)) {
       // Android lets an app start its foreground service right after it was updated.
       runCatching { GatewayService.start(context, ownNetwork = ownNetworkPreference(context)) }
     } else {

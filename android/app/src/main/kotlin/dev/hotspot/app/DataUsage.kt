@@ -50,9 +50,12 @@ object DataUsage {
     lastDevices = emptyMap()
   }
 
-  /** Takes a reading of the running core and adds what was used since the last one; returns that, per device. */
+  /**
+   * Takes a reading of the running core and adds what was used since the last one, when it is mobile data
+   * ([counted]); returns what each device moved since then.
+   */
   @Synchronized
-  fun record(context: Context, core: Core): Map<String, Long> {
+  fun record(context: Context, core: Core, counted: Boolean = true): Map<String, Long> {
     load(context)
     rollOver(context)
     val stats = core.stats()
@@ -70,6 +73,9 @@ object DataUsage {
     }
     lastTotal = total
     lastDevices = devices
+    // Shared from the phone's Wi-Fi: no mobile data was used. The readings move on all the same, so that what was
+    // moved now is never counted later; what a device moved is still handed back (a guest's allowance counts it).
+    if (!counted) return deltas
     if (added > 0 || grown != today.devices) {
       today = Today(today.total + added, grown)
       dirty = true

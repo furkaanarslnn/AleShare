@@ -56,7 +56,7 @@ func describe(set settings, onNetwork bool, tunnel string, h health) connView {
 	case tunnel == serviceMissing:
 		return connView{"warn", "Eksik", "Kurulum tamamlanmamış", "Bağlantı kurulamıyor. Gelişmiş bölümünden yeniden eşleştir."}
 	case onNetwork && tunnel == serviceRunning:
-		return connView{"ok", "Bağlı", "Telefona bağlı", "Bu bilgisayar interneti telefonun mobil verisinden alıyor."}
+		return connView{"ok", "Bağlı", "Telefona bağlı", "Bu bilgisayar interneti telefon üzerinden alıyor."}
 	case onNetwork && h.DeadEnds > 0:
 		return connView{"warn", "Yanıt yok", "Telefon yanıt vermiyor", "Telefonun Wi-Fi ağı görünüyor ama paylaşım yanıt vermiyor. Telefonda paylaşımın açık olduğuna bak; bilgisayar birazdan yeniden dener."}
 	case onNetwork:

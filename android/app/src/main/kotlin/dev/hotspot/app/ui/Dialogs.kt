@@ -83,7 +83,7 @@ fun AddDeviceSheet(canScanQr: Boolean, sharing: Boolean, onComputer: () -> Unit,
   ) {
     Column(modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
       Text("Cihaz ekle", style = MaterialTheme.typography.titleLarge)
-      Caption("Eklediğin cihaz bu telefonun mobil internetini kullanır.")
+      Caption("Eklediğin cihaz bu telefonun paylaştığı interneti (mobil veri ya da Wi-Fi) kullanır.")
       Spacer(Modifier.height(4.dp))
       ChoiceRow(
         icon = AppIcons.Laptop,
@@ -478,137 +478,10 @@ fun ComputerWaitDialog(onDismiss: () -> Unit) {
   )
 }
 
-/** The daily limits a device can have, in MiB; 0 is none. */
-private val DEVICE_LIMITS_MB = listOf(0L, 512L, 1024L, 2048L, 5120L, 10240L)
-
-/** One device: what it used today, pausing it, its daily limit, speed limit and quiet hours, and removing it. */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun DeviceDialog(
-  name: String,
-  usedToday: Long,
-  limitMb: Long,
-  paused: Boolean,
-  onPause: (Boolean) -> Unit,
-  onLimit: (Long) -> Unit,
-  speedKbps: Long,
-  onSpeed: (Long) -> Unit,
-  quiet: QuietHours?,
-  onQuiet: (QuietHours?) -> Unit,
-  guestNote: String?,
-  onRemove: () -> Unit,
-  onDismiss: () -> Unit,
-) {
-  var picking by remember { mutableStateOf<Boolean?>(null) } // true: the start of the quiet hours, false: their end
-  AlertDialog(
-    onDismissRequest = onDismiss,
-    shape = MaterialTheme.shapes.large,
-    title = { Text(name) },
-    text = {
-      Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-        guestNote?.let {
-          Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-          Spacer(Modifier.height(4.dp))
-        }
-        Text(
-          "Bugün ${humanBytes(usedToday)} kullandı." + if (paused) " İnterneti şu an duraklatılmış." else "",
-          style = MaterialTheme.typography.bodyMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(14.dp))
-        Button(onClick = { onPause(!paused) }, modifier = Modifier.fillMaxWidth().height(48.dp), shape = MaterialTheme.shapes.medium) {
-          Text(if (paused) "Devam ettir" else "İnterneti duraklat")
-        }
-        Spacer(Modifier.height(6.dp))
-        Text(
-          "Duraklatılan cihaz bağlı kalır ama internete giremez. Devam ettirince interneti hemen gelir.",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(16.dp))
-        Text("Günlük sınır", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
-        Text(
-          "Sınır dolunca bu cihazın interneti gece yarısına kadar durur ve sana bildirim gelir.",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(4.dp))
-        (DEVICE_LIMITS_MB + listOfNotNull(limitMb.takeIf { it !in DEVICE_LIMITS_MB })).forEach { mb ->
-          Row(
-            modifier = Modifier.fillMaxWidth().selectable(selected = mb == limitMb, onClick = { onLimit(mb) }, role = Role.RadioButton).padding(vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            RadioButton(selected = mb == limitMb, onClick = null)
-            Spacer(Modifier.width(12.dp))
-            Text(if (mb == 0L) "Sınır yok" else limitLabel(mb), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-          }
-        }
-        Spacer(Modifier.height(16.dp))
-        Text("Hız sınırı", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
-        Text(
-          "Bu cihaz en fazla bu hızı kullanır; kalan hız öbür cihazlara kalır.",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(6.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          (SPEEDS_KBPS + listOfNotNull(speedKbps.takeIf { it !in SPEEDS_KBPS })).forEach { kbps ->
-            FilterChip(
-              selected = kbps == speedKbps,
-              onClick = { onSpeed(kbps) },
-              label = { Text(if (kbps == 0L) "Sınırsız" else "${kbps / 1000} Mbit/s") },
-            )
-          }
-        }
-        Spacer(Modifier.height(16.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-          Column(modifier = Modifier.weight(1f)) {
-            Text("İnternetin kapalı olduğu saatler", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
-            Text(
-              "Bu cihaz her gün bu saatler arasında internete giremez (örneğin gece).",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
-          Spacer(Modifier.width(12.dp))
-          Switch(checked = quiet != null, onCheckedChange = { onQuiet(if (it) QuietHours(23 * 60, 7 * 60) else null) })
-        }
-        quiet?.let { q ->
-          Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { picking = true }) { Text(QuietHours.clock(q.from), style = MaterialTheme.typography.titleMedium) }
-            Text("–", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            TextButton(onClick = { picking = false }) { Text(QuietHours.clock(q.to), style = MaterialTheme.typography.titleMedium) }
-          }
-        }
-      }
-    },
-    confirmButton = { TextButton(onClick = onDismiss) { Text("Kapat") } },
-    dismissButton = {
-      TextButton(onClick = onRemove, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Cihazı kaldır") }
-    },
-  )
-  val q = quiet
-  val start = picking
-  if (q != null && start != null) {
-    ClockDialog(
-      title = if (start) "Başlangıç" else "Bitiş",
-      minutes = if (start) q.from else q.to,
-      onPick = { m ->
-        picking = null
-        onQuiet(if (start) q.copy(from = m) else q.copy(to = m))
-      },
-      onDismiss = { picking = null },
-    )
-  }
-}
-
-/** The speed limits to pick from, kilobits per second; 0 is none. */
-private val SPEEDS_KBPS = listOf(0L, 1_000L, 2_000L, 5_000L, 10_000L, 20_000L)
-
 /** Picks a time of day, on a 24-hour clock. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ClockDialog(title: String, minutes: Int, onPick: (Int) -> Unit, onDismiss: () -> Unit) {
+internal fun ClockDialog(title: String, minutes: Int, onPick: (Int) -> Unit, onDismiss: () -> Unit) {
   val state = rememberTimePickerState(initialHour = minutes / 60, initialMinute = minutes % 60, is24Hour = true)
   AlertDialog(
     onDismissRequest = onDismiss,

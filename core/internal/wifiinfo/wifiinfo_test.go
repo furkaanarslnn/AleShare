@@ -273,3 +273,24 @@ func TestReplayMarksNothing(t *testing.T) {
 		t.Fatal("played-back requests used up the device's own allowance")
 	}
 }
+
+// A phone that shares without a network of its own still tells the releases it offers (and the token for them);
+// an answer with neither a network nor releases is no answer.
+func TestAnswerWithoutANetwork(t *testing.T) {
+	server, device := wgkey.Generate(), wgkey.Generate()
+	r := NewResponder(server)
+	r.SetPeers([]wgkey.Key{device.Public()})
+	r.SetInfo(&Info{App: &App{Code: 47, Name: "1.2.7", Token: "full"}})
+	addr := phone(t, r, nil)
+	info, err := ask(t, addr, device, server.Public(), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.HasNetwork() || info.App == nil || info.App.Token != "full" {
+		t.Fatalf("got %+v", info)
+	}
+	r.SetInfo(&Info{})
+	if _, err := ask(t, addr, device, server.Public(), 800*time.Millisecond); !errors.Is(err, ErrNoAnswer) {
+		t.Fatalf("an empty answer was taken: %v", err)
+	}
+}

@@ -52,7 +52,7 @@ header h1 { font-size: 20px; line-height: 26px; font-weight: 600; margin: 0; let
 .chip { margin-left: auto; font-size: 12px; font-weight: 600; letter-spacing: .3px; color: var(--on-surface-variant);
   background: var(--surface-variant); border-radius: 999px; padding: 3px 10px; }
 
-.panel { background: var(--surface); border: 1px solid var(--outline-variant); border-radius: 20px; padding: 20px;
+.panel { background: var(--surface); border: 1px solid var(--outline-variant); border-radius: 22px; padding: 20px;
   margin-bottom: 12px; box-shadow: var(--shadow); }
 .stack > * + * { margin-top: 12px; }
 h2 { font-size: 26px; line-height: 32px; font-weight: 600; letter-spacing: -.3px; margin: 0; }
@@ -199,6 +199,42 @@ footer .note svg { margin-top: 1px; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin 1s linear infinite; }
 
+/* The phone app's newer look: a status pill, facts as pills, icons in tiles, a live graph. */
+.pill { display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px; border-radius: 999px; font-weight: 600;
+  background: color-mix(in srgb, currentColor 14%, transparent); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip2 { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 600;
+  background: var(--surface-variant); color: var(--on-surface); max-width: 100%; }
+.chip2 svg { color: var(--on-surface-variant); }
+.chip2.strong { background: var(--primary-container); color: var(--on-primary-container); }
+.chip2.strong svg { color: var(--on-primary-container); }
+.chip2.hot { background: var(--warn-container); color: var(--on-warn-container); }
+.chip2 .bars i.on { background: currentColor; }
+.tile { width: 36px; height: 36px; border-radius: 10px; flex: none; display: grid; place-items: center;
+  background: var(--primary-container); color: var(--on-primary-container); }
+.tile.off { background: var(--surface-variant); color: var(--on-surface-variant); }
+.tile.danger { background: var(--error-container); color: var(--error); }
+.tile.big { width: 44px; height: 44px; border-radius: 13px; }
+.tile.letter { font-weight: 700; font-size: 15px; }
+.with-dot { position: relative; flex: none; }
+.with-dot .sdot { position: absolute; right: -3px; bottom: -3px; width: 13px; height: 13px; border-radius: 50%; border: 2.5px solid var(--surface); }
+.set-row { display: flex; align-items: center; gap: 14px; padding: 10px 0; }
+.set-row .grow { flex: 1; min-width: 0; }
+.set-row .name { font-size: 15px; line-height: 22px; }
+.set-row + .set-row { border-top: 1px solid var(--outline-variant); }
+.box { background: var(--surface-variant); border-radius: 14px; padding: 10px 14px; }
+.rates { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.rate .caption { display: flex; align-items: center; gap: 6px; }
+.rate .key { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.spark { width: 100%; height: 56px; display: block; }
+.head-row { display: flex; align-items: center; gap: 12px; }
+.head-row .grow { flex: 1; min-width: 0; }
+.big-speed { font-size: 30px; line-height: 36px; font-weight: 600; letter-spacing: -.3px; }
+.mini { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.small-btn { height: 34px; padding: 0 14px; border-radius: 10px; font-weight: 600; background: var(--primary-container); color: var(--on-primary-container); }
+.small-btn:not(:disabled):hover { filter: brightness(1.05); }
+.small-btn.quiet { background: none; border: 1px solid var(--outline); color: var(--on-surface); }
+
 .preview-bar { position: fixed; top: 0; right: 0; display: flex; gap: 4px; padding: 6px; z-index: 30; flex-wrap: wrap; max-width: 260px; justify-content: flex-end; }
 .preview-bar button { font-size: 11px; padding: 3px 8px; border-radius: 8px; background: #000a; color: #fff; }
 </style>
@@ -225,6 +261,11 @@ footer .note svg { margin-top: 1px; }
     <symbol id="bolt" viewBox="0 0 24 24"><path d="M13 3L5 14h6l-1 7 8-11h-6z"/></symbol>
     <symbol id="up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
     <symbol id="down" viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></symbol>
+    <symbol id="leaf" viewBox="0 0 24 24"><path d="M5 19c0-8 5-13 14-14 0 9-5 14-13 14z"/><path d="M5 19l7-7"/></symbol>
+    <symbol id="unlock" viewBox="0 0 24 24"><path d="M5 11h14v9H5z"/><path d="M8 11V8a4 4 0 0 1 7.7-1.5"/></symbol>
+    <symbol id="signal" viewBox="0 0 24 24"><path d="M5 19v-3"/><path d="M10 19v-6"/><path d="M15 19v-9"/><path d="M20 19V5"/></symbol>
+    <symbol id="chart" viewBox="0 0 24 24"><path d="M4 20h16"/><path d="M7 16v-4"/><path d="M12 16V6"/><path d="M17 16v-7"/></symbol>
+    <symbol id="gauge" viewBox="0 0 24 24"><path d="M4 16a8 8 0 1 1 16 0"/><path d="M12 16l4-5"/></symbol>
     <symbol id="refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.3 4.9L20 16"/><path d="M20 20v-4h-4"/></symbol>
   </defs>
 </svg>
@@ -240,13 +281,13 @@ footer .note svg { margin-top: 1px; }
   <section id="welcome" hidden>
     <div class="panel stack">
       <h2>Bu bilgisayarı telefona bağla</h2>
-      <p class="muted">AleShare ile bu bilgisayar, telefonunun mobil internetini kullanır. Kurulum bir kez yapılır ve birkaç dakika sürer.</p>
+      <p class="muted">AleShare ile bu bilgisayar, telefonunun internetini (mobil veriyi ya da telefonun bağlı olduğu Wi-Fi'yi) kullanır. Kurulum bir kez yapılır ve birkaç dakika sürer.</p>
       <div class="gap-6"></div>
-      <div class="row"><span class="badge"><svg class="i"><use href="#download"/></svg></span>
+      <div class="row"><span class="tile big"><svg class="i"><use href="#download"/></svg></span>
         <div class="grow"><div class="title" style="font-weight:600">WireGuard programı</div><div class="caption">Bağlantıyı şifreler. İndirilip kurulur; bunun için bir kez internet gerekir.</div></div></div>
-      <div class="row"><span class="badge"><svg class="i"><use href="#wifi"/></svg></span>
+      <div class="row"><span class="tile big"><svg class="i"><use href="#wifi"/></svg></span>
         <div class="grow"><div style="font-weight:600">Telefonun Wi-Fi ağı</div><div class="caption">Kendiliğinden bulunur. Parolası gerekirse bir kez sorulur.</div></div></div>
-      <div class="row"><span class="badge"><svg class="i"><use href="#qr"/></svg></span>
+      <div class="row"><span class="tile big"><svg class="i"><use href="#qr"/></svg></span>
         <div class="grow"><div style="font-weight:600">QR kodla eşleşme</div><div class="caption">Ekranda çıkan kodu telefonunla okutursun.</div></div></div>
       <div class="gap-6"></div>
       <div class="banner info"><svg class="i"><use href="#phone"/></svg><div class="grow">Önce telefonda AleShare'i aç ve <b>Paylaşımı başlat</b>'a dokun.</div></div>
@@ -270,10 +311,12 @@ footer .note svg { margin-top: 1px; }
   <!-- Installed: the connection. -->
   <section id="status" hidden>
     <div class="panel">
-      <div class="status" id="st-label"><span class="dot" id="st-dot"></span><span></span></div>
+      <span class="pill tone-idle" id="st-label"><span class="dot" id="st-dot"></span><span></span></span>
       <div class="gap-12"></div>
       <h2 id="st-headline"></h2>
       <div class="gap-6"></div>
+      <div class="chips" id="st-chips"></div>
+      <div class="gap-6" id="st-chips-gap"></div>
       <p class="muted" id="st-body"></p>
       <div id="st-connect" hidden><div class="gap-20"></div><button class="btn" id="connect">Telefonun ağına bağlan</button></div>
     </div>
@@ -281,20 +324,23 @@ footer .note svg { margin-top: 1px; }
     <!-- The phone, through the tunnel: how it is doing; its devices; the speed test; its switches (folded away). -->
     <div id="phone-panel" hidden>
       <div class="panel">
-        <div class="row"><h3 class="grow">Telefon</h3><span class="caption" id="ph-version"></span></div>
+        <div class="head-row"><span class="tile"><svg class="i"><use href="#phone"/></svg></span>
+          <div class="grow"><h3>Telefon</h3><div class="caption" id="ph-version"></div></div></div>
         <div class="gap-12"></div>
-        <div class="facts">
-          <span class="fact"><svg class="i s18"><use href="#battery"/></svg><span id="ph-battery"></span></span>
-          <span class="fact" id="ph-charging" hidden><svg class="i s16"><use href="#bolt"/></svg><span class="caption">Şarj oluyor</span></span>
-          <span class="fact"><span class="bars" id="ph-bars"><i></i><i></i><i></i><i></i></span><span id="ph-network"></span></span>
-          <span class="fact"><svg class="i s18"><use href="#wifi"/></svg><span id="ph-band"></span></span>
+        <div class="chips">
+          <span class="chip2" id="ph-battery-chip"><svg class="i s16"><use href="#battery"/></svg><span id="ph-battery"></span></span>
+          <span class="chip2 strong" id="ph-charging" hidden><svg class="i s16"><use href="#bolt"/></svg>Şarj oluyor</span>
+          <span class="chip2"><span class="bars" id="ph-bars"><i></i><i></i><i></i><i></i></span><span id="ph-network"></span></span>
+          <span class="chip2"><svg class="i s16"><use href="#wifi"/></svg><span id="ph-band"></span></span>
         </div>
-        <div class="divider"></div>
-        <div class="speed">
-          <div><div class="caption">İndirme</div><div class="big-number" id="ph-down"></div></div>
-          <div><div class="caption">Yükleme</div><div class="big-number" id="ph-up"></div></div>
-          <div><div class="caption">Bugün</div><div class="big-number" id="ph-today"></div></div>
+        <div class="gap-12"></div>
+        <div class="rates">
+          <div class="rate"><div class="caption"><span class="key" style="background:var(--primary)"></span>İndirme</div><div class="big-number" id="ph-down"></div></div>
+          <div class="rate"><div class="caption"><span class="key" style="background:var(--ok)"></span>Yükleme</div><div class="big-number" id="ph-up"></div></div>
+          <div class="rate"><div class="caption" id="ph-today-caption">Bugün</div><div class="big-number" id="ph-today"></div></div>
         </div>
+        <div class="gap-6"></div>
+        <svg class="spark" id="ph-spark" viewBox="0 0 300 56" preserveAspectRatio="none"></svg>
         <div id="ph-limit-wrap" hidden><div class="gap-12"></div><div class="meter" id="ph-meter"><div></div></div>
           <div class="gap-6"></div><div class="caption" id="ph-limit-text"></div></div>
         <div id="ph-plan-wrap" hidden><div class="gap-12"></div>
@@ -307,18 +353,24 @@ footer .note svg { margin-top: 1px; }
       </div>
 
       <div class="panel">
-        <h3>Cihazlar</h3>
+        <div class="head-row"><span class="tile"><svg class="i"><use href="#laptop"/></svg></span>
+          <div class="grow"><h3>Cihazlar</h3><div class="caption" id="ph-devices-summary"></div></div></div>
+        <div class="gap-6"></div>
         <div id="ph-devices"></div>
       </div>
 
       <div class="panel">
-        <div class="row"><div class="grow"><h3>Hız testi</h3>
-          <div class="caption" id="ph-speed-caption">Önce bu bilgisayarla telefonun arası, sonra telefonun mobil interneti ölçülür.</div></div>
-          <button class="outline-btn" id="ph-speed-btn">Ölç</button></div>
+        <div class="head-row"><span class="tile"><svg class="i"><use href="#gauge"/></svg></span>
+          <div class="grow"><h3>Hız testi</h3>
+          <div class="caption" id="ph-speed-caption">Önce bu bilgisayarla telefonun arası, sonra telefonun paylaştığı internet ölçülür.</div></div>
+          <button class="small-btn" id="ph-speed-btn">Ölç</button></div>
         <div id="ph-speed-result" hidden><div class="gap-12"></div>
-          <div class="speed">
-            <div><div class="caption">Wi-Fi ↓ / ↑</div><div class="big-number small" id="ph-speed-wifi">—</div></div>
-            <div><div class="caption">Mobil ↓ / ↑</div><div class="big-number small" id="ph-speed-mobile">—</div></div>
+          <div class="row" style="align-items:flex-end"><div class="grow"><div class="caption">İnternet indirme</div>
+            <div class="big-speed" id="ph-speed-big">—</div></div><span class="pill tone-ok" id="ph-speed-word" hidden></span></div>
+          <div class="gap-12"></div>
+          <div class="box mini">
+            <div><div class="caption">İnternet yükleme</div><div class="big-number small" id="ph-speed-mobile">—</div></div>
+            <div><div class="caption">Aradaki Wi-Fi</div><div class="big-number small" id="ph-speed-wifi">—</div></div>
             <div><div class="caption">Ping</div><div class="big-number small" id="ph-speed-ping">—</div></div>
           </div>
           <div class="gap-6"></div><div class="caption" id="ph-speed-verdict"></div></div>
@@ -328,18 +380,17 @@ footer .note svg { margin-top: 1px; }
         <button class="collapse" id="ph-settings-toggle" aria-expanded="false"><h3>Telefon ayarları</h3><svg class="i"><use href="#chevron"/></svg></button>
         <div id="ph-settings" hidden>
           <div class="gap-12"></div>
-          <div class="row" style="padding:4px 0"><div class="grow"><div>Reklam ve izleyici engelleme</div><div class="caption" id="ph-ads-caption"></div></div>
+          <div class="set-row"><span class="tile" data-tile="ads"><svg class="i s18"><use href="#shield"/></svg></span><div class="grow"><div class="name">Reklam ve izleyici engelleme</div><div class="caption" id="ph-ads-caption"></div></div>
             <button class="switch" role="switch" data-key="ads" aria-label="Reklam ve izleyici engelleme"></button></div>
-          <div class="row" style="padding:4px 0"><div class="grow"><div>Veri tasarrufu</div><div class="caption">Paylaşım açıkken sistem ve oyun güncellemeleri indirilmez.</div></div>
+          <div class="set-row"><span class="tile" data-tile="saver"><svg class="i s18"><use href="#leaf"/></svg></span><div class="grow"><div class="name">Veri tasarrufu</div><div class="caption">Paylaşım açıkken sistem ve oyun güncellemeleri indirilmez.</div></div>
             <button class="switch" role="switch" data-key="saver" aria-label="Veri tasarrufu"></button></div>
-          <div class="row" style="padding:4px 0"><div class="grow"><div>Akıllı öncelik</div><div class="caption">Görüşme ya da oyun sırasında büyük indirmeler yavaşlatılır.</div></div>
+          <div class="set-row"><span class="tile" data-tile="priority"><svg class="i s18"><use href="#bolt"/></svg></span><div class="grow"><div class="name">Akıllı öncelik</div><div class="caption">Görüşme ya da oyun sırasında büyük indirmeler yavaşlatılır.</div></div>
             <button class="switch" role="switch" data-key="priority" aria-label="Akıllı öncelik"></button></div>
-          <div class="row" style="padding:4px 0"><div class="grow"><div>AleDPI modu</div><div class="caption">Açılmayan siteleri açmayı dener. Gerekmiyorsa kapalı tut.</div></div>
+          <div class="set-row"><span class="tile" data-tile="split"><svg class="i s18"><use href="#unlock"/></svg></span><div class="grow"><div class="name">AleDPI modu</div><div class="caption">Açılmayan siteleri açmayı dener. Gerekmiyorsa kapalı tut.</div></div>
             <button class="switch" role="switch" data-key="split" aria-label="AleDPI modu"></button></div>
-          <div class="row" style="padding:4px 0"><div class="grow"><div>Pil ve ısı koruması</div><div class="caption">Telefon ısınınca paylaşım yavaşlar, pil %5'e düşünce durur.</div></div>
+          <div class="set-row"><span class="tile" data-tile="guard"><svg class="i s18"><use href="#battery"/></svg></span><div class="grow"><div class="name">Pil ve ısı koruması</div><div class="caption">Telefon ısınınca paylaşım yavaşlar, pil %5'e düşünce durur.</div></div>
             <button class="switch" role="switch" data-key="guard" aria-label="Pil ve ısı koruması"></button></div>
-          <div class="divider"></div>
-          <div class="row"><div class="grow">Günlük veri sınırı</div>
+          <div class="set-row"><span class="tile"><svg class="i s18"><use href="#chart"/></svg></span><div class="grow name">Günlük veri sınırı</div>
             <select id="ph-limit"><option value="0">Sınır yok</option><option value="1024">1 GB</option><option value="2048">2 GB</option>
               <option value="5120">5 GB</option><option value="10240">10 GB</option><option value="20480">20 GB</option><option value="51200">50 GB</option></select></div>
         </div>
@@ -368,39 +419,37 @@ footer .note svg { margin-top: 1px; }
     </div>
 
     <div class="panel">
-      <h3>Bağlantı</h3>
+      <div class="head-row"><span class="tile"><svg class="i"><use href="#link"/></svg></span><h3 class="grow">Bağlantı</h3></div>
+      <div class="gap-12"></div>
+      <div class="box">
+        <div class="value-row"><div class="label">Telefonun Wi-Fi ağı</div><div class="value mono" id="d-network"></div></div>
+        <div class="divider" style="margin:6px 0"></div>
+        <div class="value-row"><div class="label">Bu bilgisayarın telefondaki adı</div><div class="value" id="d-name"></div></div>
+        <div class="divider" style="margin:6px 0"></div>
+        <div class="value-row"><div class="label">Sürümler</div><div class="value" id="d-versions"></div></div>
+      </div>
+      <div class="caption" id="d-versions-wait" style="color:var(--primary);margin-top:8px" hidden></div>
       <div class="gap-6"></div>
-      <div class="value-row"><div class="label">Telefonun Wi-Fi ağı</div><div class="value mono" id="d-network"></div></div>
-      <div class="divider"></div>
-      <div class="value-row"><div class="label">Bu bilgisayarın telefondaki adı</div><div class="value" id="d-name"></div></div>
-      <div class="divider"></div>
-      <div class="value-row"><div class="label">Sürümler</div><div class="value" id="d-versions"></div></div>
-      <div class="caption" id="d-versions-wait" style="color:var(--primary);margin-bottom:4px" hidden></div>
       <div class="caption">Yeni sürüm bir cihaza gelince öbürlerine de ulaşır: bilgisayar kendiliğinden güncellenir, telefon ve tabletler önce sorar.</div>
-      <div class="divider"></div>
-      <div class="row" style="padding:4px 0 10px">
-        <div class="grow"><div style="font-size:16px;line-height:24px">Yeni sürümleri denetle</div>
-          <div class="caption" id="d-check-caption"></div></div>
-        <button class="outline-btn" id="check-btn">Şimdi denetle</button>
-      </div>
-      <div class="divider"></div>
-      <div class="row" style="padding-top:4px">
-        <div class="grow"><div style="font-size:16px;line-height:24px">Otomatik bağlan</div>
-          <div class="caption" id="d-autojoin-caption"></div></div>
-        <button class="switch" role="switch" id="autojoin" aria-label="Otomatik bağlan"></button>
-      </div>
+      <div class="gap-6"></div>
+      <div class="set-row"><span class="tile"><svg class="i s18"><use href="#download"/></svg></span>
+        <div class="grow"><div class="name">Yeni sürümleri denetle</div><div class="caption" id="d-check-caption"></div></div>
+        <button class="small-btn quiet" id="check-btn">Şimdi denetle</button></div>
+      <div class="set-row"><span class="tile" id="autojoin-tile"><svg class="i s18"><use href="#wifi"/></svg></span>
+        <div class="grow"><div class="name">Otomatik bağlan</div><div class="caption" id="d-autojoin-caption"></div></div>
+        <button class="switch" role="switch" id="autojoin" aria-label="Otomatik bağlan"></button></div>
     </div>
 
     <div class="panel">
       <button class="collapse" id="adv-toggle" aria-expanded="false"><h3>Gelişmiş</h3><svg class="i"><use href="#chevron"/></svg></button>
       <div id="adv" hidden>
         <div class="gap-12"></div>
-        <div class="row"><span class="badge"><svg class="i"><use href="#refresh"/></svg></span>
-          <div class="grow"><div style="font-size:16px;line-height:24px">Yeniden eşleştir</div><div class="caption">Telefonda bu bilgisayarı sildiysen ya da başka bir telefona geçtiysen.</div></div>
+        <div class="row"><span class="tile"><svg class="i s18"><use href="#refresh"/></svg></span>
+          <div class="grow"><div class="name" style="font-size:15px;line-height:22px">Yeniden eşleştir</div><div class="caption">Telefonda bu bilgisayarı sildiysen ya da başka bir telefona geçtiysen.</div></div>
           <button class="outline-btn" id="repair">Başlat</button></div>
         <div class="divider" style="margin:14px 0"></div>
-        <div class="row"><span class="badge"><svg class="i"><use href="#trash"/></svg></span>
-          <div class="grow"><div style="font-size:16px;line-height:24px">Kaldır</div><div class="caption">AleShare bu bilgisayardan kaldırılır; WireGuard programı kalır.</div></div>
+        <div class="row"><span class="tile danger"><svg class="i s18"><use href="#trash"/></svg></span>
+          <div class="grow"><div class="name" style="font-size:15px;line-height:22px">Kaldır</div><div class="caption">AleShare bu bilgisayardan kaldırılır; WireGuard programı kalır.</div></div>
           <button class="outline-btn danger" id="uninstall">Kaldır</button></div>
         <div class="divider" style="margin:14px 0"></div>
         <div class="row"><div class="grow" style="font-weight:600">Son kayıtlar</div><button class="text-btn" id="open-log">Tümünü aç</button></div>
@@ -414,7 +463,7 @@ footer .note svg { margin-top: 1px; }
     <div class="note"><svg class="i s16"><use href="#shield"/></svg>
       <span class="caption">Bağlantı WireGuard ile şifrelenir. Girdiğin siteler kaydedilmez.</span></div>
     <div class="gap-6"></div>
-    <div class="caption"><span id="version"></span> · Yapımcı: furkanyela</div>
+    <div class="caption"><span id="version"></span></div>
   </footer>
 </main>
 
@@ -475,23 +524,32 @@ function shareOf(n) {
 function bitSpeed(bits) { return speed(bits / 8); }
 function bitPair(down, up) { return bitSpeed(down).replace(" Mbit/s", "") + " / " + bitSpeed(up); }
 
-// The speed test: the Wi-Fi to the phone, then the phone's mobile internet; where the bottleneck is follows.
+// The speed test: the Wi-Fi to the phone, then the internet the phone shares; where the bottleneck is follows.
 function renderSpeed(r) {
   $("ph-speed-result").hidden = false;
   $("ph-speed-btn").disabled = r.stage !== "done";
   $("ph-speed-btn").textContent = r.stage === "done" ? "Yeniden ölç" : "Ölçülüyor…";
-  $("ph-speed-wifi").textContent = r.wifiDown ? bitPair(r.wifiDown, r.wifiUp) : r.stage === "wifi" ? "…" : "—";
+  $("ph-speed-wifi").textContent = r.wifiDown ? bitSpeed(r.wifiDown) : r.stage === "wifi" ? "…" : "—";
   const m = r.mobile;
-  $("ph-speed-mobile").textContent = m ? bitPair(m.down_bps, m.up_bps) : r.stage === "mobile" ? "…" : "—";
+  $("ph-speed-mobile").textContent = m ? bitSpeed(m.up_bps) : r.stage === "mobile" ? "…" : "—";
+  $("ph-speed-big").textContent = m ? bitSpeed(m.down_bps) : r.stage === "mobile" ? "…" : "—";
+  $("ph-speed-word").hidden = !m;
+  if (m) {
+    const word = m.down_bps >= 50e6 ? "Çok hızlı" : m.down_bps >= 20e6 ? "Hızlı" : m.down_bps >= 5e6 ? "Orta" : "Yavaş";
+    $("ph-speed-word").textContent = word;
+    $("ph-speed-word").className = "pill " + (m.down_bps >= 5e6 ? "tone-ok" : "tone-warn");
+  }
   $("ph-speed-ping").textContent = m ? m.ping_ms + " ms" : "—";
-  let verdict = r.stage === "wifi" ? "Wi-Fi hızı ölçülüyor…" : r.stage === "mobile" ? "Telefon mobil internetin hızını ölçüyor (yaklaşık 20 sn)…" : "";
+  let verdict = r.stage === "wifi" ? "Wi-Fi hızı ölçülüyor…" : r.stage === "mobile" ? "Telefon internet hızını ölçüyor (yaklaşık 20 sn)…" : "";
   if (r.error) verdict = r.error;
   else if (r.stage === "done" && m) {
     const down = Math.min(r.wifiDown, m.down_bps);
-    verdict = m.down_bps < r.wifiDown * 0.8 ? "Yavaşlık mobil internetten kaynaklanıyor; Wi-Fi daha hızlı. Telefonu pencereye yaklaştırmak sinyali güçlendirebilir." :
-      r.wifiDown < m.down_bps * 0.8 ? "Yavaşlık Wi-Fi'den kaynaklanıyor. Telefonu bilgisayara yaklaştır ya da 5 GHz'e geç." :
-      "Wi-Fi ile mobil internet aynı hızda.";
-    verdict += " Bu bilgisayarda hız en fazla yaklaşık " + bitSpeed(down) + " olur. Ölçüm " + bytes(m.bytes) + " mobil veri harcadı.";
+    const wifi = state.phone && state.phone.source === "wifi";
+    verdict = m.down_bps < r.wifiDown * 0.8 ? "Yavaşlık telefonun internetinden kaynaklanıyor; bilgisayarla telefonun arası daha hızlı." +
+        (wifi ? "" : " Telefonu pencereye yaklaştırmak sinyali güçlendirebilir.") :
+      r.wifiDown < m.down_bps * 0.8 ? "Yavaşlık bilgisayarla telefonun arasındaki Wi-Fi'den kaynaklanıyor. Telefonu bilgisayara yaklaştır ya da 5 GHz'e geç." :
+      "Bilgisayarla telefonun arası ile telefonun interneti aynı hızda.";
+    verdict += " Bu bilgisayarda hız en fazla yaklaşık " + bitSpeed(down) + " olur. Ölçüm " + bytes(m.bytes) + (wifi ? " veri harcadı." : " mobil veri harcadı.");
   }
   $("ph-speed-verdict").textContent = verdict;
 }
@@ -503,6 +561,10 @@ function renderPhone() {
   if (!p) return;
   $("ph-version").textContent = p.version ? "AleShare " + p.version : "";
   $("ph-battery").textContent = p.battery >= 0 ? "%" + p.battery : "—";
+  $("ph-battery-chip").classList.toggle("hot", p.battery >= 0 && p.battery <= 15 && !p.charging);
+  rates.push([p.down_bps, p.up_bps]);
+  if (rates.length > 40) rates.shift();
+  drawSpark();
   $("ph-charging").hidden = !p.charging;
   [...$("ph-bars").children].forEach((bar, i) => bar.classList.toggle("on", i < p.signal));
   $("ph-network").textContent = p.network || "Mobil veri";
@@ -510,6 +572,8 @@ function renderPhone() {
   $("ph-down").textContent = speed(p.down_bps);
   $("ph-up").textContent = speed(p.up_bps);
   $("ph-today").textContent = bytes(p.today);
+  // Shared from the phone's Wi-Fi: no mobile data is used, and the count (of mobile data) does not grow.
+  $("ph-today-caption").textContent = p.source === "wifi" ? "Bugün (mobil veri; telefon şu an Wi-Fi paylaşıyor)" : "Bugün";
   const limit = p.limit_mb * mb;
   $("ph-limit-wrap").hidden = !limit;
   if (limit) {
@@ -530,6 +594,7 @@ function renderPhone() {
       (plan.whole_phone ? "" : " (yalnızca paylaşılan veri sayılıyor)");
   }
   $("ph-hot").hidden = !p.hot;
+  document.querySelectorAll("#phone-panel [data-tile]").forEach((t) => t.classList.toggle("off", !(pending[t.dataset.tile] ?? p[t.dataset.tile])));
   $("ph-ads-caption").textContent = "Bütün cihazlarda reklam ve izleyiciler engellenir." + (p.ads && p.blocked ? " Bu paylaşımda " + p.blocked + " istek engellendi." : "");
   document.querySelectorAll("#phone-panel .switch").forEach((s) => {
     const key = s.dataset.key;
@@ -539,16 +604,50 @@ function renderPhone() {
   const sel = $("ph-limit");
   if (![...sel.options].some((o) => +o.value === p.limit_mb)) sel.add(new Option(limitLabel(p.limit_mb), p.limit_mb));
   if (document.activeElement !== sel) sel.value = String(p.limit_mb);
-  $("ph-devices").innerHTML = (p.devices || []).map((d) => {
+  const devices = p.devices || [];
+  const held = devices.filter((d) => d.paused !== "none").length;
+  $("ph-devices-summary").textContent = devices.length ? devices.length + " cihaz" + (held ? " · " + held + " duraklatılmış" : "") : "";
+  $("ph-devices").innerHTML = devices.map((d) => {
     const paused = d.paused !== "none";
     const note = d.paused === "manual" ? "Duraklatıldı" : d.paused === "limit" ? "Günlük sınır doldu" :
       d.paused === "quiet" ? "İnternet kapalı (" + d.quiet + ")" :
-      [d.guest, "Bugün " + bytes(d.today), d.limit_mb ? "sınır " + limitLabel(d.limit_mb) : "",
+      [d.guest, d.limit_mb ? "Sınır " + limitLabel(d.limit_mb) : "",
         d.speed_kbps ? bitSpeed(d.speed_kbps * 1000) : "", d.quiet ? d.quiet + " arası kapalı" : ""].filter(Boolean).join(" · ");
-    return `<div class="device"><span class="avatar">${esc(d.name.slice(0, 1).toLocaleUpperCase("tr"))}</span>
-      <div class="grow"><div>${esc(d.name)}</div><div class="caption">${esc(note)}</div></div>
-      <button class="outline-btn" data-device="${esc(d.name)}" data-paused="${paused}">${paused ? "Devam ettir" : "Duraklat"}</button></div>`;
+    const isMe = d.name === state.name;
+    return `<div class="device"><span class="with-dot"><span class="tile letter${paused ? " off" : ""}">${esc(d.name.slice(0, 1).toLocaleUpperCase("tr"))}</span>
+        <span class="sdot" style="background:var(--${paused ? "warn" : "ok"})"></span></span>
+      <div class="grow"><div style="font-weight:600">${esc(d.name)}${isMe ? ' <span class="caption">(bu bilgisayar)</span>' : ""}</div>
+        <div class="caption" style="${paused ? "color:var(--warn)" : ""}">${esc(note || (paused ? "" : "İnternet açık"))}</div></div>
+      <div style="text-align:right;margin-right:4px"><div style="font-weight:600">${bytes(d.today)}</div><div class="caption">bugün</div></div>
+      <button class="small-btn${paused ? "" : " quiet"}" data-device="${esc(d.name)}" data-paused="${paused}">${paused ? "Devam" : "Duraklat"}</button></div>`;
   }).join("") || '<div class="caption" style="padding:8px 0">Eşleşmiş cihaz yok.</div>';
+}
+
+// The phone's speeds as it told them, the newest last: the graph under the speeds.
+const rates = [];
+function drawSpark() {
+  const svg = $("ph-spark");
+  if (rates.length < 4) { svg.innerHTML = ""; return; } // a few readings first: two make a line at the edge, not a graph
+  const w = 300, h = 56, n = 40, step = w / (n - 1), start = (n - rates.length) * step;
+  const top = Math.max(125000, ...rates.flat()) * 1.15;
+  const pt = (i, v) => [start + i * step, h - (v / top) * h];
+  const line = (k) => {
+    let d = "", [px, py] = pt(0, rates[0][k]);
+    d = `M${px},${py}`;
+    for (let i = 1; i < rates.length; i++) {
+      const [x, y] = pt(i, rates[i][k]);
+      d += ` Q${px},${py} ${(px + x) / 2},${(py + y) / 2}`;
+      [px, py] = [x, y];
+    }
+    return d + ` L${px},${py}`;
+  };
+  const down = line(0);
+  const last = start + (rates.length - 1) * step;
+  svg.innerHTML = `<defs><linearGradient id="fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--primary)" stop-opacity=".3"/><stop offset="1" stop-color="var(--primary)" stop-opacity="0"/></linearGradient></defs>
+    <line x1="0" y1="${h - .5}" x2="${w}" y2="${h - .5}" stroke="var(--outline-variant)" vector-effect="non-scaling-stroke"/>
+    <path d="${down} L${last},${h} L${start},${h} Z" fill="url(#fill)"/>
+    <path d="${down}" fill="none" stroke="var(--primary)" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+    <path d="${line(1)}" fill="none" stroke="var(--ok)" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`;
 }
 
 async function phoneChange(change) {
@@ -585,8 +684,18 @@ function render() {
   show("status");
   const v = state.view;
   const label = $("st-label");
-  label.className = "status tone-" + v.tone;
+  label.className = "pill tone-" + v.tone;
   label.lastElementChild.textContent = v.label;
+  // What the connection is, at a glance: the phone's network, and while it answers, its battery and what it shares.
+  const p = state.phone;
+  const chips = [];
+  if (state.network) chips.push(`<span class="chip2${state.onNetwork ? " strong" : ""}">${icon("wifi", "s16")}<span class="mono">${esc(state.network)}</span></span>`);
+  if (p && state.onNetwork) {
+    if (p.battery >= 0) chips.push(`<span class="chip2">${icon(p.charging ? "bolt" : "battery", "s16")}%${p.battery}</span>`);
+    chips.push(`<span class="chip2">${icon(p.source === "wifi" ? "wifi" : "signal", "s16")}${p.source === "wifi" ? "Telefonun Wi-Fi'si" : esc(p.network || "Mobil veri")}</span>`);
+  }
+  $("st-chips").innerHTML = chips.join("");
+  $("st-chips-gap").hidden = !chips.length;
   $("st-dot").classList.toggle("pulse", v.tone === "warn");
   $("st-headline").textContent = v.headline;
   $("st-body").textContent = v.body;
@@ -604,6 +713,7 @@ function render() {
   if (waiting) $("d-versions-wait").textContent = "Telefonda " + offered + " kurulmayı bekliyor: telefonda Kur'a dokun.";
   const aj = $("autojoin");
   aj.setAttribute("aria-checked", String(state.autoJoin));
+  $("autojoin-tile").classList.toggle("off", !state.autoJoin);
   $("d-autojoin-caption").textContent = state.autoJoin
     ? "Telefonda paylaşım başlayınca bu bilgisayar kendiliğinden bağlanır; paylaşım bitince eski Wi-Fi ağına döner."
     : "Kapalı. Telefonun Wi-Fi ağına kendin bağlanırsın; internet yine kendiliğinden gelir.";
@@ -819,7 +929,7 @@ function preview() {
   const base = {
     installed: true, elevated: false, version: "1.2.2", installedVersion: "1.2.1", canUpgrade: true, name: "DESKTOP-EV", phoneApp: 42, phoneAppName: "1.2.2", phoneWaiting: true,
     network: "DIRECT-HS-K7PM", next: "", autoJoin: true, onNetwork: true, tunnel: "running",
-    view: { tone: "ok", label: "Bağlı", headline: "Telefona bağlı", body: "Bu bilgisayar interneti telefonun mobil verisinden alıyor." },
+    view: { tone: "ok", label: "Bağlı", headline: "Telefona bağlı", body: "Bu bilgisayar interneti telefon üzerinden alıyor." },
     online: { name: "1.2.3", size: 8.5 * 1024 * 1024 }, onlineChecked: "13.11.2026 06:35",
     log: ["2026-11-01 16:05:45  telefonun agi goruldu, tunel aciliyor", "2026-11-01 17:46:54  guncellendi"],
     phone: {

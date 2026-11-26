@@ -423,8 +423,8 @@ func makeFolders() error {
 		entries, _ := os.ReadDir(dir)
 		for _, e := range entries {
 			path := filepath.Join(dir, e.Name())
-			if strings.EqualFold(path, privateDir()) {
-				continue // has its own list, set above
+			if strings.EqualFold(path, privateDir()) || strings.EqualFold(path, inboxDir()) {
+				continue // has its own list, set above (the inbox's below)
 			}
 			if isLink(path) {
 				continue // could not be removed: left alone, never followed
@@ -432,6 +432,9 @@ func makeFolders() error {
 			_ = command("icacls.exe", path, "/setowner", "*S-1-5-32-544", "/T", "/C", "/L", "/Q").Run()
 			_ = command("icacls.exe", path, "/reset", "/T", "/C", "/L", "/Q").Run()
 		}
+	}
+	if err := ensureInbox(); err != nil {
+		logf("gelen kutusu hazırlanamadı: %v", err) // the window then installs the old way
 	}
 	return nil
 }
@@ -628,7 +631,13 @@ func doSetup(opts setupOptions, ui setupUI) error {
 	if err != nil {
 		return err
 	}
-	if err := installSelf(self); err != nil {
+	program, written, err := programToInstall(self) // the program this file carries, not this file (see edition.go)
+	if err != nil {
+		return fmt.Errorf("program yazılamadı: %w", err)
+	}
+	err = installSelf(program)
+	written()
+	if err != nil {
 		return fmt.Errorf("program kopyalanamadı: %w", err)
 	}
 	keepSiblingAPK(self) // the release folder's APK comes along, for the phones
@@ -887,6 +896,9 @@ func cmdReconcile() error {
 		return nil
 	}
 	defer lockReconcile()()
+	if inService {
+		takeRequest(versionCode(version)) // a release the window handed over (see request_windows.go)
+	}
 	set, err := loadSettings()
 	if err != nil {
 		return err
@@ -1032,7 +1044,15 @@ func doUpgrade() error {
 		return fmt.Errorf("bu dosya AleShare %s; bilgisayarda daha yeni olan %s kurulu", version, set.Version)
 	}
 	keepSiblingAPK(self) // the release folder's APK comes along, for the phones
-	return upgradeFrom(self, version)
+	if err := makeFolders(); err != nil {
+		logf("program klasörü korunamadı: %v", err)
+	}
+	program, written, err := programToInstall(self) // the program this file carries, not this file (see edition.go)
+	if err != nil {
+		return fmt.Errorf("program yazılamadı: %w", err)
+	}
+	defer written()
+	return upgradeFrom(program, version)
 }
 
 // upgradeFrom installs the program at src (release name) over the installed one, with its watcher service (which

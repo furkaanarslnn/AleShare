@@ -9,6 +9,11 @@ import androidx.annotation.RequiresApi
 import dev.hotspot.app.R
 import androidx.compose.ui.graphics.vector.ImageVector
 import dev.hotspot.app.ShareTileService
+import dev.hotspot.app.SimCard
+import dev.hotspot.app.Source
+import dev.hotspot.app.setSourcePreference
+import dev.hotspot.app.sourcePreference
+import dev.hotspot.app.sourceProblem
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
@@ -56,6 +61,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.OutlinedButton
@@ -66,6 +73,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -152,7 +160,6 @@ import dev.hotspot.app.Guests
 import dev.hotspot.app.Plan
 import dev.hotspot.app.Updates
 import dev.hotspot.app.SpeedTest
-import dev.hotspot.app.MAKER
 import dev.hotspot.app.OnlineUpdate
 import dev.hotspot.app.QuietHours
 import dev.hotspot.app.Tr
@@ -161,6 +168,9 @@ import dev.hotspot.app.bottleneck
 
 private const val PAIRING_REOPEN_MILLIS = 30_000L
 private const val ACTIVE_PEER_SECONDS = 75L
+/** How often the screen looks whether a SIM card is there (see SimCard). */
+private const val SIM_LOOK_MILLIS = 3_000L
+
 /** How long "Paylaşımı başlat" waits for the user to switch Wi-Fi on before it lets go. */
 private const val WIFI_WAIT_MILLIS = 120_000L
 
@@ -217,9 +227,9 @@ internal fun deviceEndpoint(ownNetwork: Boolean, pickedIp: String?, port: Int): 
 /** The app's sections, in the bar at the bottom: sharing, data, settings, and joining another phone. */
 private enum class Tab(val title: String, val label: String) {
   Share("AleShare", "Paylaş"),
+  Connect("Bağlan", "Bağlan"),
   Data("Veri", "Veri"),
   Settings("Ayarlar", "Ayarlar"),
-  Connect("Bağlan", "Bağlan"),
 }
 
 @Composable
@@ -233,7 +243,11 @@ fun MainScreen() {
   var tab by rememberSaveable { mutableStateOf(Tab.Share) }
   var startWhenWifiUntil by remember { mutableStateOf(0L) } // elapsed time; 0: not waiting for Wi-Fi
   var connectedCount by remember { mutableStateOf(0) }
-  var rates by remember { mutableStateOf(0L to 0L) } // bytes per second now, down and up
+  // The devices whose tunnel carried something a moment ago, and those that are computers (see DeviceView).
+  var activeNames by remember { mutableStateOf(emptySet<String>()) }
+  var computers by remember { mutableStateOf(runCatching { core.computerNames().lines().filter { it.isNotBlank() }.toSet() }.getOrDefault(emptySet())) }
+  // Bytes per second down and up, one reading a second, the newest last: the live graph's last minute.
+  var rateHistory by remember { mutableStateOf(emptyList<Pair<Long, Long>>()) }
   var savedJoin by remember { mutableStateOf(ClientStore.load(context)) }
   var pendingLink by remember { mutableStateOf<String?>(null) }
   var pendingJoin by remember { mutableStateOf<Join?>(null) }
@@ -253,7 +267,7 @@ fun MainScreen() {
   var pairing by shownPairing
   var removing by remember { mutableStateOf<String?>(null) }
   var problem by remember { mutableStateOf<String?>(null) }
-  var ownNetwork by remember { mutableStateOf(ownNetworkPreference(context)) }
+  val ownNetwork = remember { ownNetworkPreference(context) } // always: the app opens its own network
   var showPassword by remember { mutableStateOf(false) }
   var advanced by rememberSaveable { mutableStateOf(false) }
   var changingWifi by remember { mutableStateOf(false) }
@@ -346,7 +360,9 @@ fun MainScreen() {
           usage = DataUsage.today(context) // the service adds to it while sharing
           peers = peerNames(core)
           // As the notification counts them: devices whose tunnel carried something a moment ago.
-          connectedCount = if (running) core.activePeers(ACTIVE_PEER_SECONDS).lines().count { it.isNotBlank() } else 0
+          activeNames = if (running) core.activePeers(ACTIVE_PEER_SECONDS).lines().filter { it.isNotBlank() }.toSet() else emptySet()
+          connectedCount = activeNames.size
+          computers = core.computerNames().lines().filter { it.isNotBlank() }.toSet()
           // A computer can ask to join while sharing is on and this screen is open, with nothing to press first;
           // it still needs the number to be confirmed here. A window ends after one pairing or three minutes
           // and is then opened again, but not more than once in half a minute, so a stream of bad requests
@@ -384,13 +400,17 @@ fun MainScreen() {
     if (!state.running) {
       traffic = null
       showPassword = false
+      rateHistory = emptyList()
       return@LaunchedEffect
     }
     lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
       var before: TrafficStats? = null
       while (true) {
         val now = core.stats().toTraffic()
-        before?.let { rates = (now.bytesDown - it.bytesDown).coerceAtLeast(0) to (now.bytesUp - it.bytesUp).coerceAtLeast(0) }
+        before?.let {
+          val rate = (now.bytesDown - it.bytesDown).coerceAtLeast(0) to (now.bytesUp - it.bytesUp).coerceAtLeast(0)
+          rateHistory = (rateHistory + rate).takeLast(RATE_HISTORY)
+        }
         before = now
         traffic = now
         delay(1000)
@@ -487,6 +507,32 @@ fun MainScreen() {
 
   // This device joined another phone (Bağlan): it does not share, so what only sharing uses is locked.
   val clientMode = client.phase != ClientPhase.Idle
+  // Without a SIM card there is no mobile data to share. Looked at again every few seconds: a SIM put in (or an
+  // eSIM switched on) while the app is open turns "Paylaşımı başlat" on without leaving it.
+  var simCard by remember { mutableStateOf(SimCard.present(context)) }
+  // Where the shared internet comes from: mobile data or the Wi-Fi the phone is on. A running sharing keeps its own.
+  var source by remember { mutableStateOf(sourcePreference(context)) }
+  LaunchedEffect(Unit) {
+    while (true) {
+      delay(SIM_LOOK_MILLIS)
+      simCard = SimCard.present(context)
+    }
+  }
+  val devices = remember(peers, usage, deviceTick, activeNames, computers) {
+    peers.map { name ->
+      DeviceView(
+        name = name,
+        computer = name in computers,
+        connected = name in activeNames,
+        pause = Controls.pause(context, name),
+        usedToday = usage.devices[name] ?: 0,
+        limitMb = Controls.deviceLimitMb(context, name),
+        speedKbps = Controls.deviceSpeedKbps(context, name),
+        quiet = Controls.quietHours(context, name),
+        guest = Guests.note(context, name),
+      )
+    }
+  }
   // Four sections and a bar to move between them; each section keeps its own scroll position while open.
   val scroll = rememberSaveable(tab, saver = ScrollState.Saver) { ScrollState(0) }
   Scaffold(
@@ -523,19 +569,20 @@ fun MainScreen() {
             }
             OnlineUpdateBanner(alreadyHere = state.pendingApp?.code)
             Box(modifier = Modifier.padding(bottom = 12.dp)) {
-              StatusPanel(
+              SharePanel(
                 state,
                 blocked = clientMode,
+                source = if (state.running || state.starting) state.source else source,
+                sourceProblem = sourceProblem(source, simCard),
+                onSource = { source = it; setSourcePreference(context, it) },
                 connected = connectedCount,
-                down = rates.first,
-                up = rates.second,
+                history = rateHistory,
                 onToggle = { if (state.running || state.starting) GatewayService.stop(context) else begin() },
               )
             }
             Reveal(state.running && ownNetwork) {
-              WifiPanel(
+              NetworkPanel(
                 wifi = wifi,
-                band = state.band,
                 change = state.wifiChange,
                 showPassword = showPassword,
                 onTogglePassword = { showPassword = !showPassword },
@@ -547,11 +594,9 @@ fun MainScreen() {
               )
             }
             DevicesPanel(
-              peers = peers,
-              notes = remember(peers, usage, deviceTick) { peers.associateWith { deviceNote(context, it, usage.devices[it] ?: 0) } },
+              devices = devices,
               sharing = state.running,
               onAdd = { showSheet = true },
-              onRemove = { removing = it },
               onOpen = { deviceSheet = it },
               locked = clientMode,
             )
@@ -559,7 +604,10 @@ fun MainScreen() {
 
           Tab.Data -> {
             Box(modifier = Modifier.padding(bottom = 12.dp)) {
-              UsagePanel(usage = usage, limitMb = limitMb, onLimit = { choosingLimit = true }, locked = clientMode)
+              TodayPanel(
+                usage = usage, limitMb = limitMb, onLimit = { choosingLimit = true }, locked = clientMode,
+                overWifi = (state.running || state.starting) && state.source == Source.Wifi,
+              )
             }
             Box(modifier = Modifier.padding(bottom = 12.dp)) {
               PlanPanel(
@@ -574,22 +622,14 @@ fun MainScreen() {
             Box(modifier = Modifier.padding(bottom = 12.dp)) {
               SpeedPanel(speed, onStart = { SpeedTest.start(context) })
             }
-            Reveal(traffic != null) { traffic?.let { TrafficPanel(it) } }
+            Reveal(traffic != null) { traffic?.let { SessionPanel(it) } }
           }
 
           Tab.Settings -> {
             SettingsContent(
-              blockAds = blockAds,
               saveData = saveData,
               priority = priority,
               splitTls = splitTls,
-              blocked = traffic?.dnsBlocked,
-              splitCount = traffic?.tcpSplit,
-              onBlockAds = {
-                blockAds = it
-                Controls.setBlockAds(context, it)
-                core.setBlockAds(it)
-              },
               onSaveData = {
                 saveData = it
                 Controls.setSaveData(context, it)
@@ -612,30 +652,13 @@ fun MainScreen() {
               },
               idleMin = idleMin,
               onIdle = { choosingIdle = true },
-              ownNetwork = ownNetwork,
-              ownNetworkEditable = !state.running && !state.starting,
-              onOwnNetwork = {
-                ownNetwork = it
-                setOwnNetworkPref(context, it)
-              },
               band5 = band5,
+              // Moving a running network to the other band drops every device for a while: only while sharing is off.
+              bandLocked = state.running || state.starting,
               onBand5 = {
                 band5 = it
                 Controls.setBand5(context, it)
-                GatewayService.changeBand(context) // a running network moves at once; devices rejoin by themselves
               },
-              tileAdded = tileAdded,
-              onAddTile = if (Build.VERSION.SDK_INT >= 33) ({
-                requestAddTile(context, ShareTileService::class.java, R.string.tile_label, R.drawable.ic_hotspot,
-                  markAdded = { ShareTileService.setAdded(context, true) }, done = { tileAdded = ShareTileService.added(context) })
-              }) else null,
-              onRemoveTile = { removingTile = "Paylaşım" },
-              addressesOpen = advanced,
-              onToggleAddresses = { advanced = !advanced },
-              addresses = addresses,
-              selected = selected,
-              port = state.port,
-              onSelect = { chosenIp = it },
               locked = clientMode,
             )
             Footer()
@@ -875,36 +898,33 @@ fun MainScreen() {
   if (waitingComputer) ComputerWaitDialog(onDismiss = { waitingComputer = false })
 
   deviceSheet?.let { name ->
-    DeviceDialog(
-      name = name,
-      usedToday = usage.devices[name] ?: 0,
-      limitMb = remember(name, deviceTick) { Controls.deviceLimitMb(context, name) },
-      paused = remember(name, deviceTick) { Controls.pause(context, name) != Controls.Pause.None },
-      onPause = { pause ->
-        Controls.setPaused(context, CoreHolder.peek(), name, pause)
-        deviceTick++
-      },
-      onLimit = { mb ->
-        Controls.setDeviceLimitMb(context, name, mb)
-        deviceTick++
-      },
-      speedKbps = remember(name, deviceTick) { Controls.deviceSpeedKbps(context, name) },
-      onSpeed = { kbps ->
-        Controls.setDeviceSpeedKbps(context, CoreHolder.peek(), name, kbps)
-        deviceTick++
-      },
-      quiet = remember(name, deviceTick) { Controls.quietHours(context, name) },
-      onQuiet = { q ->
-        Controls.setQuietHours(context, CoreHolder.peek(), name, q)
-        deviceTick++
-      },
-      guestNote = remember(name, deviceTick) { Guests.note(context, name) },
-      onRemove = {
-        deviceSheet = null
-        removing = name
-      },
-      onDismiss = { deviceSheet = null },
-    )
+    devices.firstOrNull { it.name == name }?.let { device ->
+      DeviceSheet(
+        device = device,
+        sharing = state.running,
+        onPause = { pause ->
+          Controls.setPaused(context, CoreHolder.peek(), name, pause)
+          deviceTick++
+        },
+        onLimit = { mb ->
+          Controls.setDeviceLimitMb(context, name, mb)
+          deviceTick++
+        },
+        onSpeed = { kbps ->
+          Controls.setDeviceSpeedKbps(context, CoreHolder.peek(), name, kbps)
+          deviceTick++
+        },
+        onQuiet = { q ->
+          Controls.setQuietHours(context, CoreHolder.peek(), name, q)
+          deviceTick++
+        },
+        onRemove = {
+          deviceSheet = null
+          removing = name
+        },
+        onDismiss = { deviceSheet = null },
+      )
+    } ?: LaunchedEffect(name) { deviceSheet = null } // removed meanwhile (by a computer, or as a guest whose time ran out)
   }
 
   removing?.let { name ->
@@ -1004,383 +1024,68 @@ private fun requestAddTile(context: Context, service: Class<*>, label: Int, icon
   }
 }
 
-/** A Quick Settings tile of the app: added to the panel from here, and taken out again. */
-@Composable
-private fun TileRow(
-  icon: ImageVector,
-  title: String,
-  addedCaption: String,
-  freeCaption: String,
-  added: Boolean,
-  onAdd: () -> Unit,
-  onRemove: () -> Unit,
-  enabled: Boolean = true,
-) {
-  Row(modifier = Modifier.alpha(if (enabled) 1f else 0.38f), verticalAlignment = Alignment.CenterVertically) {
-    Box(
-      modifier = Modifier.size(40.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
-      contentAlignment = Alignment.Center,
-    ) {
-      Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
-    }
-    Spacer(Modifier.width(14.dp))
-    Column(modifier = Modifier.weight(1f)) {
-      Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-      Caption(if (added) addedCaption else freeCaption)
-    }
-    Spacer(Modifier.width(12.dp))
-    val shape = MaterialTheme.shapes.medium
-    val padding = PaddingValues(horizontal = 18.dp)
-    if (added) {
-      OutlinedButton(onClick = onRemove, enabled = enabled, modifier = Modifier.height(38.dp), shape = shape, contentPadding = padding) {
-        Text("Kaldır", style = MaterialTheme.typography.labelLarge)
-      }
-    } else {
-      FilledTonalButton(onClick = onAdd, enabled = enabled, modifier = Modifier.height(38.dp), shape = shape, contentPadding = padding) {
-        Text("Ekle", style = MaterialTheme.typography.labelLarge)
-      }
-    }
-  }
-}
-
 private fun clipboardText(context: Context): String? =
   context.getSystemService(ClipboardManager::class.java).primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.toString()
 
-/**
- * The one thing the app does, and the one button that does it; while sharing, how fast it goes now ([down] and
- * [up] in bytes per second) and how many devices use it.
- */
+/** A setting that is on or off: its name, a few words under it, and the switch; the whole row switches it. */
 @Composable
-private fun StatusPanel(state: GatewayUiState, blocked: Boolean, connected: Int, down: Long, up: Long, onToggle: () -> Unit) {
-  val status = HotspotTheme.status
-  val idle = MaterialTheme.colorScheme.onSurfaceVariant
-  val accent by animateColorAsState(
-    when {
-      state.running -> status.ok
-      state.starting -> status.warn
-      else -> idle
-    },
-    label = "status",
-  )
-  Panel {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      StatusDot(accent, pulsing = state.starting)
-      Text(
-        when {
-          state.starting -> "Başlatılıyor"
-          state.running -> "Açık"
-          else -> "Kapalı"
-        },
-        style = MaterialTheme.typography.labelLarge,
-        color = accent,
-      )
-    }
-    Spacer(Modifier.height(12.dp))
-    Text(
-      when {
-        state.starting -> "Hazırlanıyor"
-        state.running -> "Paylaşım açık"
-        else -> "İnternetini paylaş"
-      },
-      style = MaterialTheme.typography.headlineSmall,
-      color = MaterialTheme.colorScheme.onSurface,
-    )
-    Spacer(Modifier.height(6.dp))
-    Text(
-      when {
-        state.starting -> "Mobil veri ve Wi-Fi hazırlanıyor."
-        state.running && !state.cellular -> "Mobil veri bekleniyor."
-        state.running -> listOfNotNull(if (connected > 0) "$connected cihaz bağlı" else "Bağlı cihaz yok", state.band).joinToString("  ·  ")
-        else -> "Bilgisayarın ve tabletin bu telefonun mobil internetini kullanır."
-      },
-      style = MaterialTheme.typography.bodyMedium,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    if (state.running) {
-      Spacer(Modifier.height(16.dp))
-      Row(modifier = Modifier.fillMaxWidth()) {
-        Metric(AppIcons.ArrowDown, "İndirme", bitRate(down * 8), Modifier.weight(1f))
-        Metric(AppIcons.ArrowUp, "Yükleme", bitRate(up * 8), Modifier.weight(1f))
-      }
-    }
-    state.error?.let {
-      Spacer(Modifier.height(14.dp))
-      Banner(Tone.Error, AppIcons.Alert, it)
-    }
-    if (blocked) {
-      Spacer(Modifier.height(14.dp))
-      Banner(Tone.Info, AppIcons.Alert, "Bu cihaz başka bir telefona bağlıyken paylaşım yapamaz. Önce Bağlan sekmesinden bağlantıyı durdur.")
-    }
-    Spacer(Modifier.height(20.dp))
-    ActionButton(
-      text =
-        when {
-          state.starting -> "Başlatılıyor…"
-          state.running -> "Durdur"
-          else -> "Paylaşımı başlat"
-        },
-      onClick = onToggle,
-      tonal = state.running,
-      enabled = !state.starting && (state.running || !blocked),
-    )
-  }
-}
-
-/** How to join the network the app opened. */
-@Composable
-private fun WifiPanel(
-  wifi: WifiCredentials,
-  band: String?,
-  change: WifiChange?,
-  showPassword: Boolean,
-  onTogglePassword: () -> Unit,
-  onCopy: (label: String, text: String, sensitive: Boolean) -> Unit,
-  onShowQr: () -> Unit,
-  onChange: () -> Unit,
-  onSwitchNow: () -> Unit,
-  onCancelChange: () -> Unit,
-) {
-  Panel {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-      Icon(AppIcons.Wifi, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
-      PanelTitle("Wi-Fi ağı")
-    }
-    Spacer(Modifier.height(8.dp))
-    ValueRow("Ağ adı", wifi.ssid, mono = true) {
-      IconAction(AppIcons.Copy, "Ağ adını kopyala", onClick = { onCopy("Ağ adı", wifi.ssid, false) })
-    }
-    HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant)
-    ValueRow("Parola", if (showPassword) wifi.passphrase else "••••••••••••••••", mono = true) {
-      IconAction(if (showPassword) AppIcons.EyeOff else AppIcons.Eye, if (showPassword) "Parolayı gizle" else "Parolayı göster", onClick = onTogglePassword)
-      IconAction(AppIcons.Copy, "Parolayı kopyala", onClick = { onCopy("Parola", wifi.passphrase, true) })
-    }
-    band?.let {
-      HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant)
-      ValueRow("Bant", it)
-    }
-    Spacer(Modifier.height(10.dp))
-    if (change != null) {
-      val waiting = change.waitingFor.filterNot { it in change.learned }
-      Banner(
-        Tone.Info,
-        AppIcons.Wifi,
-        when {
-          waiting.isEmpty() && change.passwordOnly -> "Ağın parolası değişiyor."
-          waiting.isEmpty() -> "Ağın adı ${change.ssid} oluyor."
-          else -> (if (change.passwordOnly) "Ağın parolası değişecek." else "Ağın adı ${change.ssid} olacak.") +
-            " Cihazlara haber veriliyor: ${change.waitingFor.size - waiting.size}/${change.waitingFor.size} (beklenen: ${waiting.joinToString()})"
-        },
-      )
-      Row(modifier = Modifier.offset(x = (-12).dp)) {
-        TextButton(onClick = onSwitchNow) { Text("Şimdi değiştir", style = MaterialTheme.typography.labelLarge) }
-        TextButton(onClick = onCancelChange) { Text("Vazgeç", style = MaterialTheme.typography.labelLarge) }
-      }
-    } else {
-      Caption("Bilgisayarı bu ağa bir kez bağlaman yeterli; Windows hatırlar. Telefon ve tabletler QR kodla bağlanır.")
-      Spacer(Modifier.height(4.dp))
-      Row(modifier = Modifier.offset(x = (-12).dp)) {
-        TextButton(onClick = onShowQr) {
-          Icon(AppIcons.Qr, contentDescription = null, modifier = Modifier.size(18.dp))
-          Spacer(Modifier.width(8.dp))
-          Text("QR ile bağlan", style = MaterialTheme.typography.labelLarge)
-        }
-        TextButton(onClick = onChange) {
-          Icon(AppIcons.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
-          Spacer(Modifier.width(8.dp))
-          Text("Değiştir", style = MaterialTheme.typography.labelLarge)
-        }
-      }
-    }
-  }
-}
-
-/** The monthly plan: what is used and left of it, what each day may use, and the last 30 days as bars. */
-@Composable
-private fun PlanPanel(plan: Plan.Status?, days: List<Plan.Day>, usageAccess: Boolean, onEdit: () -> Unit, onAllow: () -> Unit, locked: Boolean) {
-  Panel {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-      PanelTitle("Aylık paket", Modifier.weight(1f))
-      TextButton(onClick = onEdit, enabled = !locked) { Text(if (plan == null) "Paketi gir" else "Değiştir", style = MaterialTheme.typography.labelLarge) }
-    }
-    if (plan == null) {
-      Caption("Paketinin kaç GB olduğunu ve ayın kaçında yenilendiğini gir. Kalan veriyi ve paketin yetmesi için günde ne kadar kullanabileceğini burada görürsün.")
-    } else {
-      val limit = plan.limitMb * 1024 * 1024
-      val share = (plan.used.toFloat() / limit).coerceIn(0f, 1f)
-      Spacer(Modifier.height(4.dp))
-      Text("${humanBytes(plan.used)} / ${limitLabel(plan.limitMb)}", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface)
-      Spacer(Modifier.height(8.dp))
-      LinearProgressIndicator(
-        progress = { share },
-        modifier = Modifier.fillMaxWidth(),
-        color = if (share >= 0.9f) HotspotTheme.status.warn else MaterialTheme.colorScheme.primary,
-      )
-      Spacer(Modifier.height(6.dp))
-      Caption(
-        if (plan.used >= limit) "Paket bitti · ${plan.daysLeft} gün sonra yenilenir"
-        else "${humanBytes(limit - plan.used)} kaldı · yenilenmesine ${plan.daysLeft} gün var · günde en fazla ${humanBytes(plan.perDay)}"
-      )
-    }
-    if (days.any { it.shared > 0 || (it.phone ?: 0) > 0 }) {
-      Spacer(Modifier.height(14.dp))
-      UsageChart(days)
-    }
-    Spacer(Modifier.height(8.dp))
-    if (usageAccess) {
-      Caption("Telefonun bütün mobil veri kullanımı sayılıyor. Grafikteki koyu kısım paylaşılan veri.")
-    } else {
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        Caption("Şu an yalnızca paylaşılan veri sayılıyor. Telefonun kendi kullanımı da sayılsın istersen kullanım erişimi izni ver.", Modifier.weight(1f))
-        TextButton(onClick = onAllow, enabled = !locked) { Text("İzin ver", style = MaterialTheme.typography.labelLarge) }
-      }
-    }
-  }
-}
-
-/** The last days as bars, today last: the whole phone faint (when it can be read), sharing's part strong. */
-@Composable
-private fun UsageChart(days: List<Plan.Day>) {
-  val strong = MaterialTheme.colorScheme.primary
-  val faint = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
-  val track = MaterialTheme.colorScheme.outlineVariant
-  val top = days.maxOf { maxOf(it.shared, it.phone ?: 0) }.coerceAtLeast(1)
-  Column {
-    Caption("En yüksek gün: ${humanBytes(top)}")
-    Spacer(Modifier.height(6.dp))
-    Canvas(modifier = Modifier.fillMaxWidth().height(72.dp)) {
-      val slot = size.width / days.size
-      val bar = slot * 0.62f
-      drawLine(track, Offset(0f, size.height), Offset(size.width, size.height), strokeWidth = 1.dp.toPx())
-      days.forEachIndexed { i, d ->
-        val x = i * slot + (slot - bar) / 2
-        val whole = maxOf(d.phone ?: 0, d.shared)
-        if (whole > 0) {
-          val h = (whole.toFloat() / top * size.height).coerceAtLeast(2.dp.toPx())
-          drawRoundRect(faint, Offset(x, size.height - h), Size(bar, h), CornerRadius(2.dp.toPx()))
-        }
-        if (d.shared > 0) {
-          val h = (d.shared.toFloat() / top * size.height).coerceAtLeast(2.dp.toPx())
-          drawRoundRect(strong, Offset(x, size.height - h), Size(bar, h), CornerRadius(2.dp.toPx()))
-        }
-      }
-    }
-    Spacer(Modifier.height(4.dp))
-    Row(modifier = Modifier.fillMaxWidth()) {
-      Caption("${days.first().date.dayOfMonth}.${days.first().date.monthValue}", Modifier.weight(1f))
-      Caption("Bugün")
-    }
-  }
-}
-
-/** The speed test of the phone's internet: the last result and the button. */
-@Composable
-private fun SpeedPanel(speed: SpeedTest.State, onStart: () -> Unit) {
-  Panel {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-      PanelTitle("Hız testi", Modifier.weight(1f))
-      TextButton(onClick = onStart, enabled = !speed.running) {
-        Text(if (speed.running) "Ölçülüyor…" else "Ölç", style = MaterialTheme.typography.labelLarge)
-      }
-    }
-    if (speed.running) {
-      Spacer(Modifier.height(6.dp))
-      LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-      speed.stage?.let {
-        Spacer(Modifier.height(6.dp))
-        Caption(it)
-      }
-    }
-    speed.last?.let { r ->
-      Spacer(Modifier.height(8.dp))
-      Row(modifier = Modifier.fillMaxWidth()) {
-        Metric(AppIcons.ArrowDown, "İndirme", bitRate(r.downBps), Modifier.weight(1f))
-        Metric(AppIcons.ArrowUp, "Yükleme", bitRate(r.upBps), Modifier.weight(1f))
-        Metric(AppIcons.Link, "Ping", "${r.pingMs} ms", Modifier.weight(0.7f))
-      }
-      if (r.wifiDownBps > 0) {
-        Spacer(Modifier.height(8.dp))
-        Caption("Telefonla aradaki Wi-Fi: ↓ ${bitRate(r.wifiDownBps)} · ↑ ${bitRate(r.wifiUpBps)}")
-        bottleneck(r)?.let { Caption(it) }
-      }
-      Spacer(Modifier.height(6.dp))
-      Caption("${ago(r.at)} ölçüldü · ${humanBytes(r.bytes)} mobil veri harcandı")
-    }
-    speed.error?.let {
-      Spacer(Modifier.height(6.dp))
-      Caption(it)
-    }
-    if (speed.last == null && speed.error == null && !speed.running) {
-      Caption("Telefonun mobil internetinin hızını ölçer; en fazla yaklaşık 55 MB veri harcar.")
-    }
-  }
-}
-
-/** "3 dk önce" for a time in Unix seconds. */
-private fun ago(unixSeconds: Long): String {
-  val minutes = (System.currentTimeMillis() / 1000 - unixSeconds).coerceAtLeast(0) / 60
-  return when {
-    minutes < 1 -> "Az önce"
-    minutes < 60 -> "$minutes dk önce"
-    minutes < 24 * 60 -> "${minutes / 60} saat önce"
-    else -> "${minutes / (24 * 60)} gün önce"
-  }
-}
-
-@Composable
-private fun SwitchRow(title: String, caption: String, checked: Boolean, onChange: (Boolean) -> Unit, enabled: Boolean = true) {
-  Row(verticalAlignment = Alignment.CenterVertically) {
+private fun SwitchRow(title: String, caption: String?, checked: Boolean, onChange: (Boolean) -> Unit, enabled: Boolean = true) {
+  Row(
+    modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).alpha(if (enabled) 1f else 0.38f)
+      .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChange)
+      .padding(vertical = 10.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
     Column(modifier = Modifier.weight(1f)) {
       Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-      Caption(caption)
+      caption?.let { Caption(it) }
     }
-    Spacer(Modifier.width(12.dp))
-    Switch(checked = checked, onCheckedChange = onChange, enabled = enabled)
+    Spacer(Modifier.width(16.dp))
+    Switch(checked = checked, onCheckedChange = null, enabled = enabled)
   }
 }
 
-/** A row that opens a choice: its name on the left, what is chosen on the right. */
+/** A setting with a value to pick, or something to do: its name on the left, the value on the right. */
 @Composable
-private fun ChoiceRow(title: String, value: String, onClick: () -> Unit, enabled: Boolean = true) {
+private fun ValueRow(title: String, value: String, onClick: () -> Unit, enabled: Boolean = true) {
   Row(
-    modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp).alpha(if (enabled) 1f else 0.38f)
-      .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+    modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).alpha(if (enabled) 1f else 0.38f)
+      .clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(vertical = 10.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
     Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-    Spacer(Modifier.width(12.dp))
-    Text(value, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+    Spacer(Modifier.width(16.dp))
+    Text(value, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
   }
 }
 
 @Composable
-private fun RowDivider() = HorizontalDivider(modifier = Modifier.padding(vertical = 14.dp), color = MaterialTheme.colorScheme.outlineVariant)
+private fun RowDivider() = HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-/** A group of settings: its name above, its rows in one panel. */
+/** A group of settings: a small name above, its rows in one quiet card. */
 @Composable
 private fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
   Text(
-    title,
-    modifier = Modifier.padding(start = 4.dp, bottom = 8.dp),
-    style = MaterialTheme.typography.labelLarge,
-    color = MaterialTheme.colorScheme.primary,
+    title.uppercase(Tr.locale),
+    modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
+    style = MaterialTheme.typography.labelMedium,
+    color = MaterialTheme.colorScheme.onSurfaceVariant,
   )
-  Panel(content = content)
-  Spacer(Modifier.height(20.dp))
+  Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 4.dp), content = content)
+  }
+  Spacer(Modifier.height(24.dp))
 }
 
 /**
- * Everything there is to set, in groups: what happens to the shared traffic, the phone itself, the Wi-Fi network,
- * the Quick Settings tile, and the address the QR codes carry (folded away: most people never need it).
+ * What there is to set, in four short groups: the shared traffic, the phone, the Wi-Fi network and updates. Each row
+ * says in a few words what it does; the rest of the app explains more where it matters.
  */
 @Composable
 private fun SettingsContent(
-  blockAds: Boolean,
   saveData: Boolean,
   priority: Boolean,
   splitTls: Boolean,
-  blocked: Long?,
-  splitCount: Long?,
-  onBlockAds: (Boolean) -> Unit,
   onSaveData: (Boolean) -> Unit,
   onPriority: (Boolean) -> Unit,
   onSplit: (Boolean) -> Unit,
@@ -1388,20 +1093,9 @@ private fun SettingsContent(
   onGuard: (Boolean) -> Unit,
   idleMin: Long,
   onIdle: () -> Unit,
-  ownNetwork: Boolean,
-  ownNetworkEditable: Boolean,
-  onOwnNetwork: (Boolean) -> Unit,
   band5: Boolean,
+  bandLocked: Boolean,
   onBand5: (Boolean) -> Unit,
-  tileAdded: Boolean,
-  onAddTile: (() -> Unit)?,
-  onRemoveTile: () -> Unit,
-  addressesOpen: Boolean,
-  onToggleAddresses: () -> Unit,
-  addresses: List<LocalAddress>,
-  selected: LocalAddress?,
-  port: Int,
-  onSelect: (String) -> Unit,
   locked: Boolean,
 ) {
   // A device that joined another phone does not share: what only sharing uses is locked until it stops.
@@ -1409,57 +1103,36 @@ private fun SettingsContent(
     Banner(Tone.Info, AppIcons.Link, "Bu cihaz şu an başka bir telefona bağlı. Paylaşım ayarları, bağlantıyı durdurunca açılır.")
     Spacer(Modifier.height(16.dp))
   }
-  SettingsGroup("Koruma ve tasarruf") {
-    SwitchRow(
-      "Reklam ve izleyici engelleme",
-      "Bağlı bütün cihazlarda reklamlar ve izleyiciler engellenir." + (blocked?.takeIf { blockAds && it > 0 }?.let { " Bu paylaşımda $it istek engellendi." } ?: ""),
-      blockAds, onBlockAds, enabled = !locked,
-    )
+  SettingsGroup("Paylaşım") {
+    SwitchRow("Veri tasarrufu", "Sistem ve oyun güncellemeleri indirilmez", saveData, onSaveData, enabled = !locked)
     RowDivider()
-    SwitchRow("Veri tasarrufu", "Paylaşım açıkken sistem ve oyun güncellemeleri indirilmez.", saveData, onSaveData, enabled = !locked)
+    SwitchRow("Akıllı öncelik", "Görüşme ve oyunlar önce gelir", priority, onPriority, enabled = !locked)
     RowDivider()
-    SwitchRow("Akıllı öncelik", "Görüşme ya da oyun sırasında büyük indirmeler yavaşlatılır.", priority, onPriority, enabled = !locked)
-    RowDivider()
-    SwitchRow(
-      "AleDPI modu",
-      if (splitTls && splitCount != null) "Açık. Bu paylaşımda $splitCount bağlantıda kullanıldı." else "Açılmayan siteleri açmayı dener. Gerekmiyorsa kapalı tut.",
-      splitTls, onSplit, enabled = !locked,
-    )
+    SwitchRow("AleDPI modu", "Açılmayan siteleri açmayı dener", splitTls, onSplit, enabled = !locked)
   }
 
   SettingsGroup("Telefon") {
-    SwitchRow("Pil ve ısı koruması", "Telefon ısınınca paylaşım yavaşlar. Pil %${Guard.BATTERY_WARN}'e düşünce uyarır, %${Guard.BATTERY_STOP}'e düşünce paylaşımı durdurur.", guard, onGuard, enabled = !locked)
+    SwitchRow("Pil ve ısı koruması", "Isınınca yavaşlar, pil %${Guard.BATTERY_STOP}'e düşünce durur", guard, onGuard, enabled = !locked)
     RowDivider()
-    ChoiceRow("Kimse bağlı değilken kapat", if (idleMin > 0) "${idleLabel(idleMin)} sonra" else "Kapalı", onIdle, enabled = !locked)
+    ValueRow("Kimse bağlı değilken kapat", if (idleMin > 0) idleLabel(idleMin) + " sonra" else "Kapalı", onIdle, enabled = !locked)
   }
 
   SettingsGroup("Wi-Fi ağı") {
-    SwitchRow(
-      "Wi-Fi ağını uygulama açsın",
-      if (ownNetworkEditable) "Kapatırsan telefonun kendi hotspot'unu ya da başka bir ağı sen açarsın." else "Paylaşım açıkken değiştirilemez.",
-      ownNetwork, onOwnNetwork, enabled = ownNetworkEditable && !locked,
-    )
-    if (ownNetwork) {
-      RowDivider()
-      Text("Bant", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-      Spacer(Modifier.height(8.dp))
-      SegmentedSwitch(options = listOf(false to "2,4 GHz", true to "5 GHz"), selected = band5, onSelect = { if (it != band5) onBand5(it) }, enabled = !locked)
-      Spacer(Modifier.height(6.dp))
-      Caption(if (band5) "Daha hızlıdır. Bilgisayarın ağı göremezse 2,4 GHz'e dön." else "Her cihaz görür ama 5 GHz kadar hızlı değildir.")
-    }
-  }
-
-  if (onAddTile != null) {
-    SettingsGroup("Kısayol") {
-      TileRow(
-        icon = AppIcons.Toggle,
-        title = "Paylaşım düğmesi",
-        addedCaption = "Hızlı ayarlara eklendi; paylaşımı tek dokunuşla açıp kapatır.",
-        freeCaption = "Paylaşımı bildirim panelinden tek dokunuşla açıp kapatmak için ekle.",
-        added = tileAdded,
-        onAdd = onAddTile,
-        onRemove = onRemoveTile,
-        enabled = !locked,
+    Row(modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+      Column(modifier = Modifier.weight(1f)) {
+        Text("Bant", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+        Caption(
+          when {
+            bandLocked -> "Paylaşım açıkken değiştirilemez"
+            band5 -> "Daha hızlı"
+            else -> "Her cihaz görür"
+          }
+        )
+      }
+      Spacer(Modifier.width(16.dp))
+      SegmentedSwitch(
+        options = listOf(false to "2,4 GHz", true to "5 GHz"), selected = band5, onSelect = { if (it != band5) onBand5(it) }, enabled = !locked && !bandLocked,
+        modifier = Modifier.width(176.dp),
       )
     }
   }
@@ -1468,18 +1141,13 @@ private fun SettingsContent(
     val context = LocalContext.current
     val online by OnlineUpdate.state.collectAsStateWithLifecycle()
     var auto by remember { mutableStateOf(OnlineUpdate.enabled(context)) }
-    SwitchRow(
-      "Yeni sürümleri denetle",
-      "Birkaç saatte bir GitHub'a bakar ve yeni sürüm yayımlanınca haber verir. İndirme ancak sen isteyince başlar.",
-      auto,
-      { auto = it; OnlineUpdate.setEnabled(context, it) },
-    )
+    SwitchRow("Yeni sürümleri denetle", "Yeni sürüm çıkınca haber verir", auto, { auto = it; OnlineUpdate.setEnabled(context, it) })
     RowDivider()
-    ChoiceRow(
+    ValueRow(
       "Şimdi denetle",
       when {
         online.checking -> "Bakılıyor…"
-        online.offer != null -> "${online.offer?.name} yayımlandı"
+        online.offer != null -> "${online.offer?.name} çıktı"
         else -> ""
       },
       onClick = {
@@ -1501,155 +1169,11 @@ private fun SettingsContent(
       },
     )
   }
-
-  SettingsGroup("Gelişmiş") {
-    val turn by animateFloatAsState(if (addressesOpen) 180f else 0f, label = "chevron")
-    Row(
-      modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp).alpha(if (locked) 0.38f else 1f)
-        .clickable(enabled = !locked, role = Role.Button, onClick = onToggleAddresses),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Column(modifier = Modifier.weight(1f)) {
-        Text("Bağlantı adresi", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-        Caption(selected?.let { "${it.ip}:$port" } ?: "Henüz adres yok")
-      }
-      Icon(
-        AppIcons.ChevronDown,
-        contentDescription = if (addressesOpen) "Daralt" else "Genişlet",
-        modifier = Modifier.size(20.dp).rotate(turn),
-        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-    }
-    AnimatedVisibility(visible = addressesOpen && !locked, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
-      Column {
-        Spacer(Modifier.height(8.dp))
-        if (addresses.isEmpty()) {
-          Caption("Telefonun paylaşım ağında henüz bir adresi yok. Önce paylaşımı başlat ya da telefonun kendi hotspot'unu aç.")
-        }
-        addresses.forEach { a ->
-          val isSelected = a.ip == selected?.ip
-          Row(
-            modifier = Modifier.fillMaxWidth().selectable(selected = isSelected, onClick = { onSelect(a.ip) }, role = Role.RadioButton).padding(vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            RadioButton(selected = isSelected, onClick = null)
-            Spacer(Modifier.width(12.dp))
-            Column {
-              Text("${a.ip}:$port", style = MaterialTheme.typography.bodyLarge, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurface)
-              Caption(a.ifName)
-            }
-          }
-        }
-        Spacer(Modifier.height(6.dp))
-        Caption("Telefon veya tablet eklerken seçili adres QR koda yazılır.")
-      }
-    }
-  }
 }
 
 /** The line under a device's name: why it is paused, or what it used today and the rules it has. */
-private fun deviceNote(context: Context, name: String, used: Long): String {
-  val limit = Controls.deviceLimitMb(context, name)
-  val quiet = Controls.quietHours(context, name)
-  return when (Controls.pause(context, name)) {
-    Controls.Pause.Manual -> "Duraklatıldı"
-    Controls.Pause.Limit -> "Günlük sınır doldu · gece yarısı devam eder"
-    Controls.Pause.Quiet -> (quiet?.let { "İnternet kapalı · ${QuietHours.clockAt(it.to)} açılır" } ?: "İnternet kapalı")
-    Controls.Pause.None -> listOfNotNull(
-      Guests.note(context, name),
-      used.takeIf { it > 0 }?.let { "Bugün ${humanBytes(it)}" },
-      limit.takeIf { it > 0 }?.let { "sınır ${limitLabel(it)}" },
-      Controls.deviceSpeedKbps(context, name).takeIf { it > 0 }?.let { bitRate(it * 1000) },
-      quiet?.let { "${it.label()} arası kapalı" },
-    ).joinToString(" · ")
-  }
-}
-
 /** "30 dk", "1 saat", "2 saat". */
 internal fun idleLabel(minutes: Long): String = if (minutes >= 60 && minutes % 60 == 0L) "${minutes / 60} saat" else "$minutes dk"
-
-@Composable
-private fun TrafficPanel(t: TrafficStats) {
-  Panel {
-    PanelTitle("Bu oturum")
-    Spacer(Modifier.height(12.dp))
-    Row(modifier = Modifier.fillMaxWidth()) {
-      Metric(AppIcons.ArrowUp, "Yükleme", humanBytes(t.bytesUp), Modifier.weight(1f))
-      Metric(AppIcons.ArrowDown, "İndirme", humanBytes(t.bytesDown), Modifier.weight(1f))
-      Metric(AppIcons.Link, "Bağlantı", (t.tcpActive + t.udpActive).toString(), Modifier.weight(0.7f))
-    }
-    val dns =
-      when {
-        t.dnsPlain > 0 -> "${t.dnsPlain} DNS sorgusu şifresiz gitti (şifreli sunuculara ulaşılamadı)"
-        t.dnsEncrypted > 0 -> "DNS sorguları şifreli"
-        else -> null
-      }
-    val notes = listOfNotNull(dns, t.dialErrors.takeIf { it > 0 }?.let { "Ulaşılamayan adres: $it" })
-    if (notes.isNotEmpty()) {
-      Spacer(Modifier.height(12.dp))
-      Caption(notes.joinToString("  ·  "))
-    }
-  }
-}
-
-@Composable
-private fun DevicesPanel(
-  peers: List<String>,
-  notes: Map<String, String>,
-  sharing: Boolean,
-  onAdd: () -> Unit,
-  onRemove: (String) -> Unit,
-  onOpen: (String) -> Unit,
-  locked: Boolean,
-) {
-  Panel {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-      PanelTitle("Cihazlar", Modifier.weight(1f))
-      FilledTonalButton(
-        onClick = onAdd,
-        enabled = !locked,
-        modifier = Modifier.height(36.dp),
-        shape = MaterialTheme.shapes.small,
-        contentPadding = PaddingValues(start = 12.dp, end = 16.dp),
-      ) {
-        Icon(AppIcons.Plus, contentDescription = null, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(6.dp))
-        Text("Ekle", style = MaterialTheme.typography.labelLarge)
-      }
-    }
-    Spacer(Modifier.height(8.dp))
-    if (locked) {
-      Caption("Bu cihaz başka bir telefona bağlıyken cihaz eklenemez ve ayarlar değiştirilemez.", Modifier.padding(bottom = 8.dp))
-    } else if (peers.isEmpty()) {
-      Caption(
-        if (sharing) "Henüz cihaz yok. Bilgisayar eklemek için bilgisayarda AleShare.exe'yi aç, sonra burada Ekle → Bilgisayar'a dokunup ekrandaki QR kodu tara."
-        else "Henüz cihaz yok. Bilgisayar eklemek için önce paylaşımı başlat.",
-        Modifier.padding(vertical = 8.dp),
-      )
-    }
-    peers.forEachIndexed { i, name ->
-      if (i > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-      Row(
-        modifier = Modifier.fillMaxWidth().clickable(enabled = !locked, role = Role.Button, onClick = { onOpen(name) }).padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Avatar(name)
-        Spacer(Modifier.width(14.dp))
-        Column(modifier = Modifier.weight(1f)) {
-          Text(
-            name,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-          notes[name]?.takeIf { it.isNotEmpty() }?.let { Caption(it) }
-        }
-        IconAction(AppIcons.Trash, "$name cihazını kaldır", onClick = { onRemove(name) }, enabled = !locked)
-      }
-    }
-  }
-}
 
 @Composable
 private fun Footer() {
@@ -1666,42 +1190,7 @@ private fun Footer() {
       Caption("Bağlantı WireGuard ile şifrelenir. Girilen siteler kaydedilmez.", Modifier.weight(1f, fill = false))
     }
     Spacer(Modifier.height(10.dp))
-    Caption(listOfNotNull(version?.let { "Sürüm $it" }, "Yapımcı: $MAKER").joinToString("  ·  "))
-  }
-}
-
-/** Today's mobile data: in all, against the daily limit when there is one, and the button that sets the limit. */
-@Composable
-private fun UsagePanel(usage: DataUsage.Today, limitMb: Long, onLimit: () -> Unit, locked: Boolean) {
-  val limit = limitMb * 1024 * 1024
-  Panel {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-      Column(modifier = Modifier.weight(1f)) {
-        Caption("Bugün paylaşılan veri")
-        Text(humanBytes(usage.total), style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface)
-      }
-      TextButton(onClick = onLimit, enabled = !locked) {
-        Text(if (limitMb > 0) "Sınır: ${limitLabel(limitMb)}" else "Sınır koy", style = MaterialTheme.typography.labelLarge)
-      }
-    }
-    if (limit > 0) {
-      val share = (usage.total.toFloat() / limit).coerceIn(0f, 1f)
-      val over = usage.total >= limit
-      Spacer(Modifier.height(10.dp))
-      LinearProgressIndicator(
-        progress = { share },
-        modifier = Modifier.fillMaxWidth(),
-        color = if (over || share >= 0.9f) HotspotTheme.status.warn else MaterialTheme.colorScheme.primary,
-      )
-      Spacer(Modifier.height(6.dp))
-      Caption(
-        if (over) "Bugünkü sınır doldu ve paylaşım durduruldu. Yeniden başlatırsan bugün bir daha durmaz."
-        else "Sınırın ${Tr.share((share * 100).toInt())} kullanıldı · gece yarısı sıfırlanır"
-      )
-    } else {
-      Spacer(Modifier.height(4.dp))
-      Caption("Sayaç gece yarısı sıfırlanır. Her cihazın kullanımını Paylaş sekmesindeki cihaz listesinde görürsün.")
-    }
+    version?.let { Caption("Sürüm $it") }
   }
 }
 
@@ -1711,9 +1200,6 @@ private fun isIgnoringBattery(context: Context): Boolean =
   context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
 
 
-private fun setOwnNetworkPref(context: Context, value: Boolean) {
-  context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putBoolean("own_network", value).apply()
-}
 
 private fun requestIgnoreBattery(context: Context) {
   openSettings(

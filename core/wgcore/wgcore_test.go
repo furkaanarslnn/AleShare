@@ -81,6 +81,9 @@ func TestProvisioning(t *testing.T) {
 	if got := c2.PeerNames(); got != "phone\ntablet" {
 		t.Fatalf("restored clients = %q", got)
 	}
+	if got := c2.ComputerNames(); got != "" {
+		t.Fatalf("devices added with a code taken for computers: %q", got)
+	}
 }
 
 func freeUDPPort(t *testing.T) int {
@@ -187,6 +190,10 @@ func TestPairingEnrollsAComputer(t *testing.T) {
 	}
 	if c.PeerNames() != "DESKTOP-TEST" {
 		t.Fatalf("peers = %q", c.PeerNames())
+	}
+	// Paired on the phone's screen with its own key: a computer, which the app shows as one.
+	if c.ComputerNames() != "DESKTOP-TEST" {
+		t.Fatalf("computers = %q", c.ComputerNames())
 	}
 	js, _ := c.StateJSON()
 	if !strings.Contains(js, res.Private.Public().Base64()) || strings.Contains(js, res.Private.Base64()) {

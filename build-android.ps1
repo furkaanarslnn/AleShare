@@ -123,13 +123,34 @@ if ($Release) {
     if ($LASTEXITCODE) { throw "go-winres failed ($LASTEXITCODE)" }
     $env:GOOS = 'windows'; $env:GOARCH = 'amd64'
     # A windowed program (no black console behind the window); the command line still gets its output.
-    go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$name" -o "$dist\AleShare.exe" .
-    if ($LASTEXITCODE) { throw "go build AleShare.exe failed ($LASTEXITCODE)" }
+    # Twice: the program that is installed, then the file people download, which carries it (cmd/hotspot-pc/edition.go:
+    # setting up from a file that copies itself is what Kaspersky stops as a trojan).
+    go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$name" -o "$dist\hotspot-pc-program.exe" .
+    if ($LASTEXITCODE) { throw "go build of the program failed ($LASTEXITCODE)" }
   } finally {
     Remove-Item Env:GOOS, Env:GOARCH -ErrorAction SilentlyContinue
     Pop-Location
   }
   # The release signature: computers install a program that came from a phone only with it (internal/release).
+  Push-Location "$root\core"
+  try {
+    go run ./cmd/hotspot-sign sign -key $releaseKey -code $code "$dist\hotspot-pc-program.exe"
+    if ($LASTEXITCODE) { throw "signing the program failed ($LASTEXITCODE)" }
+  } finally {
+    Pop-Location
+  }
+  $embedded = "$root\core\cmd\hotspot-pc\embedded\program.exe"
+  Copy-Item "$dist\hotspot-pc-program.exe" $embedded -Force
+  Push-Location "$root\core\cmd\hotspot-pc"
+  try {
+    $env:GOOS = 'windows'; $env:GOARCH = 'amd64'
+    go build -tags installer -trimpath -ldflags "-s -w -H=windowsgui -X main.version=$name" -o "$dist\AleShare.exe" .
+    if ($LASTEXITCODE) { throw "go build AleShare.exe failed ($LASTEXITCODE)" }
+  } finally {
+    Remove-Item Env:GOOS, Env:GOARCH -ErrorAction SilentlyContinue
+    Remove-Item $embedded -Force -ErrorAction SilentlyContinue
+    Pop-Location
+  }
   Push-Location "$root\core"
   try {
     go run ./cmd/hotspot-sign sign -key $releaseKey -code $code "$dist\AleShare.exe"
@@ -139,8 +160,9 @@ if ($Release) {
   }
   $assets = "$root\android\app\src\main\assets"
   New-Item -ItemType Directory -Force $assets | Out-Null
-  # Inside the APK the program keeps its old name: phones of every release ask for it by that name.
-  Copy-Item "$dist\AleShare.exe" "$assets\hotspot-pc.exe" -Force
+  # Inside the APK the program keeps its old name: phones of every release ask for it by that name. The program
+  # alone (computers take it through their service, which never trips the antivirus): half the size.
+  Copy-Item "$dist\hotspot-pc-program.exe" "$assets\hotspot-pc.exe" -Force
   Remove-Item "$dist\hotspot-pc.exe" -Force -ErrorAction SilentlyContinue # the name before 1.0.32
 }
 
